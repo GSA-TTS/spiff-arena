@@ -48,6 +48,9 @@ FROM base AS setup
 RUN pip install poetry==1.6.1
 RUN useradd _gunicorn --no-create-home --user-group
 
+# install jq so we can get values from vcap
+RUN pip install jq
+
 # default-libmysqlclient-dev for mysqlclient lib
 # libpq-dev in order to be able to poetry install postgres lib, psycopg2. See also libpq5 above in deployment image.
 RUN apt-get update \
