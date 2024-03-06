@@ -27,6 +27,9 @@ RUN apt-get update \
   && apt-get install -y -q git-core curl procps default-mysql-client vim-tiny jq libpq5 libkrb5support0 libexpat1 \
   && rm -rf /var/lib/apt/lists/*
 
+# install jq so we can get values from vcap
+RUN pip install jq
+
 # keep pip up to date
 RUN pip install --upgrade pip
 RUN pip install uv==0.6.16
@@ -41,9 +44,6 @@ RUN git config --global --add safe.directory '*'
 FROM base AS setup
 
 RUN pip install uv==0.6.16
-
-# install jq so we can get values from vcap
-RUN pip install jq
 
 # default-libmysqlclient-dev for mysqlclient lib
 # libpq-dev in order to be able to install postgres lib, psycopg2. See also libpq5 above in deployment image.
