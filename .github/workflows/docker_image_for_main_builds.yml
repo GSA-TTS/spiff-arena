@@ -30,10 +30,12 @@ on:
   push:
     branches:
       - main
-      - spiffdemo
+      # - spiffdemo
+      # - bugfix/data-object-management
+      # - feature/update-extension-docs
       - deploy-to-cloud-gov
-      - GSA-TTS-fix-path-routing-in-generated-openid-urls
-      - use-vite-to-build
+      # - GSA-TTS-fix-path-routing-in-generated-openid-urls
+      # - use-vite-to-build
 
 jobs:
   create_frontend_docker_image:
