@@ -31,6 +31,7 @@ on:
     branches:
       - main
       - spiffdemo
+      - deploy-to-cloud-gov
       - GSA-TTS-fix-path-routing-in-generated-openid-urls
       - use-vite-to-build
 
