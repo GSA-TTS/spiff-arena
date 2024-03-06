@@ -42,6 +42,9 @@ FROM base AS setup
 
 RUN pip install uv==0.6.16
 
+# install jq so we can get values from vcap
+RUN pip install jq
+
 # default-libmysqlclient-dev for mysqlclient lib
 # libpq-dev in order to be able to install postgres lib, psycopg2. See also libpq5 above in deployment image.
 RUN apt-get update \
