@@ -4,4 +4,8 @@ frontend-image: ghcr.io/gsa-tts/spiffworkflow-frontend:deploy-to-cloud-gov-lates
 db-instance: spiffworkflow-db
 flask-session-key: 66eef9e98a3f4e6f85258154e4a1bdce
 openid-secret: flarblegarble
-randomish-route: flamingo-stardust
+
+# The "slug" is a URL-friendly string that can be used to distinguish between
+# deployments. It will be including in app names and generated URLs. (You can leave
+# this empty for an "official" deployment.)
+slug: -flamingo-stardust
