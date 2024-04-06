@@ -65,7 +65,7 @@ applications:
     # Hardcoded
     FLASK_DEBUG: "0"
     APPLICATION_ROOT: "/"
-    SPIFFWORKFLOW_BACKEND_APPLICATION_ROOT: "/api"
+    SPIFFWORKFLOW_BACKEND_WSGI_PATH_PREFIX: "/api"
     SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR: "/app/process_models"
     # spiffworkflow_backend.config.ConfigurationError: SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND and SPIFFWORKFLOW_BACKEND_URL are incompatible. We need backend to set cookies for frontend, so they need to be on the same domain. A common setup is to have frontend on example.com and backend on api.example.com. If you do not need this functionality, you can avoid this check by setting environment variable SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY=false
     SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY: "false"
