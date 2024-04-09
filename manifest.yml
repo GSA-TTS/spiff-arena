@@ -1,7 +1,5 @@
 ---
 defaults: &defaults
-  services:
-    - ((db-instance))
   disk_quota: 3G
   memory: 512M
   instances: 1  
@@ -40,7 +38,8 @@ applications:
   health_check_type: process
   routes:
     - route: spiffworkflow((slug)).app.cloud.gov/api
-
+  services:
+    - ((db-instance))
   # With buildpack:
   # path: spiffworkflow-backend
   # buildpacks:
