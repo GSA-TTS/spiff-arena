@@ -22,7 +22,7 @@ FROM base AS deployment
 # vim ftw
 RUN apt-get update \
  && apt-get clean -y \
- && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client vim-tiny jq \
+ && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client libpq-dev vim-tiny jq \
  && rm -rf /var/lib/apt/lists/*
 
 # keep pip up to date
