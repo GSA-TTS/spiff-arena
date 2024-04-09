@@ -22,11 +22,8 @@ FROM base AS deployment
 # vim ftw
 RUN apt-get update \
  && apt-get clean -y \
- && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client vim-tiny \
+ && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client vim-tiny jq \
  && rm -rf /var/lib/apt/lists/*
-
-# install jq so we can get values from vcap
-RUN pip install jq
 
 # keep pip up to date
 RUN pip install --upgrade pip
