@@ -49,7 +49,10 @@ applications:
   # With Docker:
   docker:
     image: ((backend-image))
-  command: /app/bin/boot_server_in_docker
+  command: |
+    # Get the postgres URI from the service binding. (SQL Alchemy insists on "postgresql://".🙄)
+    export SPIFFWORKFLOW_BACKEND_DATABASE_URI=$( echo $VCAP_SERVICES | jq -r '.["aws-rds"][].credentials.uri' | sed -e s/postgres/postgresql/ ) 
+    /app/bin/boot_server_in_docker
   # command: sleep 6000
 
   env:
@@ -59,7 +62,6 @@ applications:
     ### Requires VCAP env vars
 
     # VCAP_SERVICES
-    SPIFFWORKFLOW_BACKEND_DATABASE_URI: "sqlite:///db.sqlite3"
 
     # Hardcoded
     FLASK_DEBUG: "0"
@@ -70,7 +72,7 @@ applications:
     # spiffworkflow_backend.config.ConfigurationError: SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND and SPIFFWORKFLOW_BACKEND_URL are incompatible. We need backend to set cookies for frontend, so they need to be on the same domain. A common setup is to have frontend on example.com and backend on api.example.com. If you do not need this functionality, you can avoid this check by setting environment variable SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY=false
     SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY: "false"
     SPIFFWORKFLOW_BACKEND_ENV: "local_docker"
-    SPIFFWORKFLOW_BACKEND_DATABASE_TYPE: "sqlite"
+    SPIFFWORKFLOW_BACKEND_DATABASE_TYPE: "postgres"
     SPIFFWORKFLOW_BACKEND_LOAD_FIXTURE_DATA: "false"
     SPIFFWORKFLOW_BACKEND_LOG_LEVEL: "INFO"
     SPIFFWORKFLOW_BACKEND_OPEN_ID_CLIENT_ID: "spiffworkflow-backend"
