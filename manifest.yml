@@ -3,7 +3,7 @@ defaults: &defaults
   services:
     - ((db-instance))
   disk_quota: 3G
-  memory: 256M
+  memory: 512M
   instances: 1  
 
 applications:
