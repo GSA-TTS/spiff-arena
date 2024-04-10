@@ -78,6 +78,7 @@ fi
 
 # ensure that the Process Models Directory is initialized as a git repo
 log_info "Running git init"
+git config --global init.defaultBranch main
 git init "${SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR}"
 
 # # VersionOneThree and the process_instance_file_data db => filesystem migration have run on all necessary environments,
