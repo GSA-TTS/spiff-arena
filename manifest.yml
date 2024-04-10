@@ -2,7 +2,7 @@
 defaults: &defaults
   disk_quota: 3G
   memory: 512M
-  instances: 1  
+  instances: 1
 
 applications:
 
@@ -51,24 +51,43 @@ applications:
     image: ((backend-image))
   command: |
     # Get the postgres URI from the service binding. (SQL Alchemy insists on "postgresql://".🙄)
-    export SPIFFWORKFLOW_BACKEND_DATABASE_URI=$( echo $VCAP_SERVICES | jq -r '.["aws-rds"][].credentials.uri' | sed -e s/postgres/postgresql/ ) 
+    export SPIFFWORKFLOW_BACKEND_DATABASE_URI=$( echo $VCAP_SERVICES | jq -r '.["aws-rds"][].credentials.uri' | sed -e s/postgres/postgresql/ )
+    /app/bin/clone_process_models
     /app/bin/boot_server_in_docker
   # command: sleep 6000
 
   env:
     # All of the configuration variables are documented here:
     # https://github.com/sartography/spiff-arena/blob/main/spiffworkflow-backend/src/spiffworkflow_backend/config/default.py
-    
+
     ### Requires VCAP env vars
 
     # VCAP_SERVICES
+    # SPIFFWORKFLOW_BACKEND_DATABASE_URI: "sqlite:///db.sqlite3"
+
+    # Rearrange later
+    # https://github.com/sartography/spiff-arena/blob/293aa867a1cef056c5bee3ef037be31047fdc49e/spiffworkflow-backend/src/spiffworkflow_backend/config/default.py#L157-L179
+    SPIFFWORKFLOW_BACKEND_GIT_COMMIT_ON_SAVE: "true"
+    SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_CLONE_URL: ((git-process-models))
+    SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_TARGET_BRANCH: ((target-branch-for-publish))
+    SPIFFWORKFLOW_BACKEND_GIT_SOURCE_BRANCH: ((source-branch)) # branch needs to exist, otherwise it can't clone it or commit to it on save
+    SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR: "/app/process_models"
+    SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY: ((github-ssh-key))
+
+    # These do not appear to be necessary for the core functionality at this time. Since it doesnt use https anymore, and instead uses ssh,
+    # having these does nothing, as the git history for commits will be tethered to the ssh key. We may use these later.
+    # SPIFFWORKFLOW_BACKEND_GIT_USERNAME:
+    # SPIFFWORKFLOW_BACKEND_GIT_USER_EMAIL:
+    # SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH:
+    # https://github.com/gsa-tts/spiff-arena/blob/main/spiffworkflow-backend/bin/git_commit_bpmn_models_repo
+    # https://github.com/gsa-tts/spiff-arena/blob/main/spiffworkflow-backend/bin/clone_process_models
+    # https://github.com/gsa-tts/spiff-arena/blob/main/spiffworkflow-backend/bin/find_sample_process_models
 
     # Hardcoded
     FLASK_DEBUG: "0"
     APPLICATION_ROOT: "/"
     SPIFFWORKFLOW_BACKEND_USE_WERKZEUG_MIDDLEWARE_PROXY_FIX: "true"
     SPIFFWORKFLOW_BACKEND_WSGI_PATH_PREFIX: "/api"
-    SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR: "/app/process_models"
     # spiffworkflow_backend.config.ConfigurationError: SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND and SPIFFWORKFLOW_BACKEND_URL are incompatible. We need backend to set cookies for frontend, so they need to be on the same domain. A common setup is to have frontend on example.com and backend on api.example.com. If you do not need this functionality, you can avoid this check by setting environment variable SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY=false
     SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY: "false"
     SPIFFWORKFLOW_BACKEND_ENV: "local_docker"
@@ -80,7 +99,7 @@ applications:
     SPIFFWORKFLOW_BACKEND_PORT: "8080"
     SPIFFWORKFLOW_BACKEND_RUN_BACKGROUND_SCHEDULER_IN_CREATE_APP: "true"
     SPIFFWORKFLOW_BACKEND_UPGRADE_DB: "true"
-    
+
     # vars.yml (or CLI)
     FLASK_SESSION_SECRET_KEY: ((flask-session-key))
     SPIFFWORKFLOW_BACKEND_OPEN_ID_CLIENT_SECRET_KEY: "((openid-secret))"
