@@ -19,6 +19,12 @@ users:
     email: oskar@example.com
     password: oskar
     preferred_username: Oskar
+  asteel:
+    service: local_open_id
+    email: alexander.steel@gsa.gov
+    password: asteel
+    preferred_username: asteel
+
 
 groups:
   admin:
