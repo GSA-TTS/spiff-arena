@@ -68,7 +68,7 @@ applications:
     # Rearrange later
     # https://github.com/sartography/spiff-arena/blob/293aa867a1cef056c5bee3ef037be31047fdc49e/spiffworkflow-backend/src/spiffworkflow_backend/config/default.py#L157-L179
     SPIFFWORKFLOW_BACKEND_GIT_COMMIT_ON_SAVE: "true"
-    SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_CLONE_URL: ((git-process-models))
+    SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_CLONE_URL: ((git-process-models-repo))
     SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_TARGET_BRANCH: ((target-branch-for-publish))
     SPIFFWORKFLOW_BACKEND_GIT_SOURCE_BRANCH: ((source-branch)) # branch needs to exist, otherwise it can't clone it or commit to it on save
     SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR: "/app/process_models"
