@@ -3,7 +3,7 @@ defaults: &defaults
   disk_quota: 3G
   memory: 512M
   instances: 1
-
+  default-route: false
 applications:
 
 ################################
