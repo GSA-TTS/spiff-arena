@@ -65,7 +65,6 @@ applications:
     ### Requires VCAP env vars
 
     # VCAP_SERVICES
-    # SPIFFWORKFLOW_BACKEND_DATABASE_URI: "sqlite:///db.sqlite3"
 
     # Rearrange later
     # https://github.com/sartography/spiff-arena/blob/293aa867a1cef056c5bee3ef037be31047fdc49e/spiffworkflow-backend/src/spiffworkflow_backend/config/default.py#L157-L179
@@ -103,7 +102,7 @@ applications:
     SPIFFWORKFLOW_BACKEND_UPGRADE_DB: "true"
 
     # vars.yml (or CLI)
-    FLASK_SESSION_SECRET_KEY: ((flask-session-key))
+    FLASK_SESSION_SECRET_KEY: ((backend-flask-session-key))
     SPIFFWORKFLOW_BACKEND_OPEN_ID_CLIENT_SECRET_KEY: "((openid-secret))"
     SPIFFWORKFLOW_BACKEND_OPEN_ID_SERVER_URL: "https://spiffworkflow((slug)).app.cloud.gov/api/openid"
     SPIFFWORKFLOW_BACKEND_URL: "https://spiffworkflow((slug)).app.cloud.gov/api"
