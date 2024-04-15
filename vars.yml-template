@@ -2,7 +2,7 @@ backend-image: ghcr.io/gsa-tts/spiffworkflow-backend:deploy-to-cloud-gov-latest
 frontend-image: ghcr.io/gsa-tts/spiffworkflow-frontend:deploy-to-cloud-gov-latest
 
 db-instance: spiffworkflow-db
-flask-session-key: 66eef9e98a3f4e6f85258154e4a1bdce
+backend-flask-session-key: 66eef9e98a3f4e6f85258154e4a1bdce
 git-process-models-repo: git@github.com:GSA-TTS/gsa-process-models.git
 openid-secret: flarblegarble
 source-branch: process-models-playground
