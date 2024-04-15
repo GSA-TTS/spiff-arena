@@ -35,7 +35,8 @@ applications:
 - name: spiffworkflow((slug))-backend
   <<: *defaults
   disk_quota: 3G
-  health_check_type: process
+  health-check-http-endpoint: /api/v1.0/status
+  health-check-type: http
   routes:
     - route: spiffworkflow((slug)).app.cloud.gov/api
   services:
