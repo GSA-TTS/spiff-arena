@@ -54,9 +54,16 @@ applications:
   command: |
     # Get the postgres URI from the service binding. (SQL Alchemy insists on "postgresql://".🙄)
     export SPIFFWORKFLOW_BACKEND_DATABASE_URI=$( echo $VCAP_SERVICES | jq -r '.["aws-rds"][].credentials.uri' | sed -e s/postgres/postgresql/ )
+    
+    # Make sure the Cloud Foundry-provided CA is recognized when making TLS connections
+    cat /etc/cf-system-certificates/* > /usr/local/share/ca-certificates/cf-system-certificates.crt
+    /usr/sbin/update-ca-certificates
+
+    # Verify that this is working. It should return '{"ok": true}'
+    # curl https://spiffworkflow((slug))-connector.apps.internal:61443/liveness
+
     /app/bin/clone_process_models
     /app/bin/boot_server_in_docker
-  # command: sleep 6000
 
   env:
     # All of the configuration variables are documented here:
@@ -65,7 +72,8 @@ applications:
     ### Requires VCAP env vars
 
     # VCAP_SERVICES
-
+    # This is necessary for Python to pick up custom CAs
+    REQUESTS_CA_BUNDLE: "/etc/ssl/certs/ca-certificates.crt"
     # Rearrange later
     # https://github.com/sartography/spiff-arena/blob/293aa867a1cef056c5bee3ef037be31047fdc49e/spiffworkflow-backend/src/spiffworkflow_backend/config/default.py#L157-L179
     SPIFFWORKFLOW_BACKEND_GIT_COMMIT_ON_SAVE: "true"
@@ -107,8 +115,30 @@ applications:
     SPIFFWORKFLOW_BACKEND_OPEN_ID_SERVER_URL: "https://spiffworkflow((slug)).app.cloud.gov/api/openid"
     SPIFFWORKFLOW_BACKEND_URL: "https://spiffworkflow((slug)).app.cloud.gov/api"
     SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND: "https://spiffworkflow((slug)).app.cloud.gov"
-    SPIFFWORKFLOW_BACKEND_CONNECTOR_PROXY_URL: "https://spiffworkflow-connector((slug)).app.cloud.gov"
+    SPIFFWORKFLOW_BACKEND_CONNECTOR_PROXY_URL: "https://spiffworkflow((slug))-connector.apps.internal:61443"
 
     #   - SPIFFWORKFLOW_BACKEND_DATABASE_URI=mysql+mysqldb://root:${SPIFFWORKFLOW_BACKEND_MYSQL_ROOT_DATABASE:-my-secret-pw}@127.0.0.1:7003/${SPIFFWORKFLOW_BACKEND_DATABASE_NAME:-spiffworkflow_backend_development}
     #   - SPIFFWORKFLOW_BACKEND_OPEN_ID_SERVER_URL=http://localhost:7002/realms/spiffworkflow
+
+#################################
+
+- name: spiffworkflow((slug))-connector
+  <<: *defaults
+  memory: 256M
+  disk_quota: 3G
+  health-check-type: http
+  health-check-http-endpoint: /liveness
+
+  routes:
+    - route: spiffworkflow((slug))-connector.apps.internal
+  docker:
+    image: ((connector-image))
+  command: |
+    /app/bin/boot_server_in_docker
+
+  env:
+    FLASK_ENV: "${FLASK_ENV:-development}"
+    FLASK_DEBUG: "0"
+    FLASK_SESSION_SECRET_KEY: ((connector-flask-secret-key))
+    CONNECTOR_PROXY_PORT: "8080"
 
