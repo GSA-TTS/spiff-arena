@@ -1,7 +1,6 @@
 ---
 defaults: &defaults
   disk_quota: 3G
-  memory: 512M
   instances: 1
   default-route: false
 applications:
@@ -13,6 +12,7 @@ applications:
     - route: spiffworkflow((slug)).app.cloud.gov
   docker:
     image: ((frontend-image))
+  memory: 256M
   env:
     APPLICATION_ROOT: "/"
     PORT0: "8080"
@@ -49,6 +49,7 @@ applications:
   # With Docker:
   docker:
     image: ((backend-image))
+  memory: 512M
   command: |
     # Get the postgres URI from the service binding. (SQL Alchemy insists on "postgresql://".🙄)
     export SPIFFWORKFLOW_BACKEND_DATABASE_URI=$( echo $VCAP_SERVICES | jq -r '.["aws-rds"][].credentials.uri' | sed -e s/postgres/postgresql/ )
