@@ -44,7 +44,7 @@ applications:
   command: |
     # Get the postgres URI from the service binding. (SQL Alchemy insists on "postgresql://".🙄)
     export SPIFFWORKFLOW_BACKEND_DATABASE_URI=$( echo $VCAP_SERVICES | jq -r '.["aws-rds"][].credentials.uri' | sed -e s/postgres/postgresql/ )
-    
+
     # Make sure the Cloud Foundry-provided CA is recognized when making TLS connections
     cat /etc/cf-system-certificates/* > /usr/local/share/ca-certificates/cf-system-certificates.crt
     /usr/sbin/update-ca-certificates
@@ -66,14 +66,15 @@ applications:
     SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR: "/app/process_models"
     SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY: "false"
     SPIFFWORKFLOW_BACKEND_CONNECTOR_PROXY_URL: "https://spiffworkflow((slug))-connector.apps.internal:61443"
-    SPIFFWORKFLOW_BACKEND_ENV: "local_docker"
     SPIFFWORKFLOW_BACKEND_DATABASE_TYPE: "postgres"
+    SPIFFWORKFLOW_BACKEND_ENV: "local_docker"
+    SPIFFWORKFLOW_BACKEND_EXTENSIONS_API_ENABLED: "true"
     SPIFFWORKFLOW_BACKEND_GIT_COMMIT_ON_SAVE: "true"
     SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_CLONE_URL: ((git-process-models-repo))
     SPIFFWORKFLOW_BACKEND_GIT_PUBLISH_TARGET_BRANCH: ((target-branch-for-publish))
 
     # This branch needs to exist, otherwise we can't clone it at startup and startup fails
-    SPIFFWORKFLOW_BACKEND_GIT_SOURCE_BRANCH: ((source-branch)) 
+    SPIFFWORKFLOW_BACKEND_GIT_SOURCE_BRANCH: ((source-branch))
     SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY: ((github-ssh-key))
     SPIFFWORKFLOW_BACKEND_LOAD_FIXTURE_DATA: "false"
     SPIFFWORKFLOW_BACKEND_LOG_LEVEL: "INFO"
