@@ -7,9 +7,10 @@ import {
 import React from 'react';
 import { TextInput } from '@carbon/react';
 import { getCommonAttributes } from '../../helpers';
+import { matchNumberRegex } from '../../../helpers';
 
 // Example jsonSchema - NOTE: the "min" and "max" properties are special names and must be used:
-//    compensation":{
+//    "compensation":{
 //      "title": "Compensation (yearly), USD",
 //      "type": "object",
 //      "minimum": 0,
@@ -26,7 +27,7 @@ import { getCommonAttributes } from '../../helpers';
 //
 //  Example uiSchema:
 //    "compensation": {
-//      "ui:field": "numeric-range",
+//      "ui:field": "numeric-range"
 //    }
 
 // eslint-disable-next-line sonarjs/cognitive-complexity
@@ -66,6 +67,11 @@ export default function NumericRangeField({
     // and a decimal point if needed. For example, 1000 will become 1,000
     // or 1000.5 will become 1,000.5
 
+    // if it does not look like a number then just return it
+    if (!numberString.match(matchNumberRegex)) {
+      return numberString;
+    }
+
     const numberStringNoCommas = numberString.replace(/,/g, '');
 
     if (numberStringNoCommas) {
@@ -86,9 +92,6 @@ export default function NumericRangeField({
     return Number(numberString.replace(/,/g, ''));
   };
 
-  if (schema.minimum === undefined || schema.maximum === undefined) {
-    throw new Error('minimum and maximum not defined');
-  }
   const minNumber = schema.minimum;
   const maxNumber = schema.maximum;
   const min = formData?.min;
@@ -119,11 +122,24 @@ export default function NumericRangeField({
     }
   };
 
+  let minHelperText = '';
+  let maxHelperText = '';
+  if (minNumber !== undefined || maxNumber !== undefined) {
+    minHelperText = `Min: ${
+      formatNumberString(minNumber?.toString() || '') || '-∞'
+    }`;
+    maxHelperText = `Max: ${
+      formatNumberString(maxNumber?.toString() || '') || '∞'
+    }`;
+  }
+
   return (
     <div className="numeric--range-field-wrapper">
-      <div className="numeric--range-field-label">
+      <div>
         <h5>
-          {required ? `${commonAttributes.label} *` : commonAttributes.label}
+          {required
+            ? commonAttributes.labelWithRequiredIndicator
+            : commonAttributes.label}
         </h5>
         {description && (
           <div className="markdown-field-desc-text">
@@ -150,7 +166,8 @@ export default function NumericRangeField({
             setMinValue(event.target.value);
           }}
           invalid={commonAttributes.invalid}
-          helperText={`Min: ${formatNumberString(minNumber?.toString() || '')}`}
+          invalidText={minHelperText}
+          helperText={minHelperText}
           autofocus={autofocus}
         />
         <TextInput
@@ -165,7 +182,8 @@ export default function NumericRangeField({
             setMaxValue(event.target.value);
           }}
           invalid={commonAttributes.invalid}
-          helperText={`Max: ${formatNumberString(maxNumber?.toString() || '')}`}
+          invalidText={maxHelperText}
+          helperText={maxHelperText}
         />
       </div>
       {commonAttributes.errorMessageForField && (

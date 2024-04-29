@@ -10,7 +10,7 @@ import TypeaheadWidget from '../rjsf/custom_widgets/TypeaheadWidget/TypeaheadWid
 import MarkDownFieldWidget from '../rjsf/custom_widgets/MarkDownFieldWidget/MarkDownFieldWidget';
 import NumericRangeField from '../rjsf/custom_widgets/NumericRangeField/NumericRangeField';
 import ObjectFieldRestrictedGridTemplate from '../rjsf/custom_templates/ObjectFieldRestrictGridTemplate';
-import CharacterCounterField from '../rjsf/custom_widgets/CharacterCounterField/CharacterCounterField';
+import { matchNumberRegex } from '../helpers';
 
 enum DateCheckType {
   minimum = 'minimum',
@@ -57,7 +57,6 @@ export default function CustomForm({
   // set in uiSchema using the "ui:field" key for a property
   const rjsfFields: RegistryFieldsType = {
     'numeric-range': NumericRangeField,
-    'character-counter': CharacterCounterField,
   };
 
   const rjsfTemplates: any = {};
@@ -264,9 +263,13 @@ export default function CustomForm({
       (formDataToCheck[propertyKey].min === undefined ||
         formDataToCheck[propertyKey].max === undefined)
     ) {
-      errors[propertyKey].addError(
-        `must have valid Minimum and Maximum on ${propertyKey}`
-      );
+      errors[propertyKey].addError('must have valid Minimum and Maximum');
+    }
+    if (
+      !formDataToCheck[propertyKey].min?.toString().match(matchNumberRegex) ||
+      !formDataToCheck[propertyKey].max?.toString().match(matchNumberRegex)
+    ) {
+      errors[propertyKey].addError('must have valid numbers');
     }
     if (
       formDataToCheck[propertyKey].min <

@@ -3,6 +3,7 @@ import os
 import shutil
 import uuid
 from json import JSONDecodeError
+from typing import Any
 from typing import TypeVar
 
 from flask import current_app
@@ -559,6 +560,11 @@ class ProcessModelService(FileSystemService):
                     process_groups.append(scanned_process_group)
             return process_groups
 
+    @classmethod
+    def restrict_dict(cls, data: dict[str, Any]) -> dict[str, Any]:
+        allowed_keys = ProcessGroup.get_valid_properties()
+        return {key: data[key] for key in data if key in allowed_keys}
+
     # NOTE: find_all_nested_items was added to avoid potential backwards compatibility issues.
     # we may be able to remove it and always pass "find_direct_nested_items=False" whenever looking
     # through the subdirs of a process group instead.
@@ -574,7 +580,8 @@ class ProcessModelService(FileSystemService):
                 # we don't store `id` in the json files, so we add it back in here
                 relative_path = os.path.relpath(dir_path, FileSystemService.root_path())
                 data["id"] = cls.path_to_id(relative_path)
-                process_group = ProcessGroup(**data)
+                restricted_data = cls.restrict_dict(data)
+                process_group = ProcessGroup(**restricted_data)
                 if process_group is None:
                     raise ApiError(
                         error_code="process_group_could_not_be_loaded_from_disk",
@@ -664,3 +671,12 @@ class ProcessModelService(FileSystemService):
             # we don't store `id` in the json files, so we add it in here
             process_model_info.id = name
         return process_model_info
+
+    @classmethod
+    def get_process_group_with_permission_check(cls, process_group_id: str, user: UserModel) -> ProcessGroup:
+        process_models = cls.get_process_models_for_api(user=user, process_group_id=process_group_id, recursive=False)
+        if not process_models:
+            raise ProcessEntityNotFoundError("User has no access to contained models, and therefore no access to group.")
+
+        # do not return child models and groups here since this call does not check permissions of them
+        return cls.get_process_group(process_group_id, find_direct_nested_items=False)
