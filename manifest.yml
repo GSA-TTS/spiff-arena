@@ -98,9 +98,10 @@ applications:
   docker:
     image: ((frontend-image))
   memory: 256M
+  health-check-type: port
   env:
     APPLICATION_ROOT: "/"
-    PORT0: "8080"
+    PORT0: "80"
     SPIFFWORKFLOW_FRONTEND_RUNTIME_CONFIG_APP_ROUTING_STRATEGY: "path_based"
     SPIFFWORKFLOW_FRONTEND_RUNTIME_CONFIG_BACKEND_BASE_URL: "https://spiffworkflow((slug)).app.cloud.gov/api"
     BACKEND_BASE_URL: "https://spiffworkflow((slug)).app.cloud.gov/api"
