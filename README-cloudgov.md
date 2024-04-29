@@ -3,8 +3,8 @@ Create a rds instance for use with the system called `spiffworkflow-db`:
 `cf create-service aws-rds micro-psql spiffworkflow-db`
 
 In order to utilize the newly created db, the following security groups will also need to be added to your sandbox:
-`cf bind-security-group trusted_local_networks ORGNAME  --lifecycle running --space SPACENAME`
-`cf bind-security-group trusted_local_networks_egress ORGNAME  --lifecycle running --space SPACENAME`
+`cf bind-security-group trusted_local_networks ORGNAME --lifecycle running --space SPACENAME`
+`cf bind-security-group trusted_local_networks_egress ORGNAME --lifecycle running --space SPACENAME`
 
 In order to successfully get the front end to redirect in the sandbox space, run the following command:
 `cf bind-security-group public_networks_egress ORGNAME --lifecycle running --space SPACENAME`
