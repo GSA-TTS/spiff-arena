@@ -1,0 +1,49 @@
+---
+name: Trivy Scan
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches:
+      - main
+      - deploy-to-cloud-gov
+
+permissions:
+  contents: read
+
+jobs:
+  scan-third-party:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    name: Trivy Scan Third Party Images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: ghcr.io/gsa-tts/spiffworkflow-backend:deploy-to-cloud-gov-latest
+          - name: ghcr.io/gsa-tts/spiffworkflow-frontend:deploy-to-cloud-gov-latest
+          - name: ghcr.io/gsa-tts/connector-proxy-demo:deploy-to-cloud-gov-latest
+    steps:
+      - name: Pull Third Party Docker Images
+        run: docker pull ${{ matrix.image.name }}
+
+      - name: Run Trivy vulnerability scanner on Third Party Images
+        uses: aquasecurity/trivy-action@0.19.0
+        with:
+          image-ref: '${{ matrix.image.name }}'
+          scan-type: 'image'
+          hide-progress: false
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: 0 # Setting the exit-code to 1 will fail the action, without publishing to Github Security Tab (> aquasecurity/trivy-action@0.13.1)
+          severity: 'CRITICAL,HIGH'
+          timeout: 15m0s
+          ignore-unfixed: true
+
+      - name: Upload Trivy scan results to GitHub Security tab for Third Party Images
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
