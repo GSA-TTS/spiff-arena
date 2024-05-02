@@ -12,3 +12,4 @@ process_models/
 .cache
 .mypy_cache
 .aider*
+vars.yml

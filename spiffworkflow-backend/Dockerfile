@@ -22,13 +22,12 @@ FROM base AS deployment
 # vim ftw
 RUN apt-get update \
  && apt-get clean -y \
- && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client vim-tiny \
+ && apt-get install -y -q git-core curl procps gunicorn3 default-mysql-client libpq-dev vim-tiny jq \
  && rm -rf /var/lib/apt/lists/*
 
 # keep pip up to date
 RUN pip install --upgrade pip
 RUN pip install poetry==1.8.1
-
 
 ######################## - SETUP
 
