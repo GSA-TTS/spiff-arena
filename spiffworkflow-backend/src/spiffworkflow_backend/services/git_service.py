@@ -177,10 +177,26 @@ class GitService:
 
         # SSH authentication can be also provided via gitconfig.
         ssh_key_path = current_app.config.get("SPIFFWORKFLOW_BACKEND_GIT_SSH_PRIVATE_KEY_PATH")
+        git_username = current_app.config.get("SPIFFWORKFLOW_BACKEND_GIT_USERNAME")
+        git_password = os.environ.get("GITHUB_TOKEN")  # Use GITHUB_TOKEN for the password
+
         if ssh_key_path is not None:
             my_env["GIT_SSH_COMMAND"] = (
                 f"ssh -F /dev/null -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i {ssh_key_path}"
             )
+        elif git_username and git_password:
+            # Set up GIT_ASKPASS for HTTPS authentication
+            askpass_script = f"""#!/bin/sh
+            case "$1" in
+                Username*) echo "{git_username}" ;;
+                Password*) echo "{git_password}" ;;
+            esac
+            """
+            askpass_path = "/tmp/git_askpass.sh"
+            with open(askpass_path, "w") as f:
+                f.write(askpass_script)
+            os.chmod(askpass_path, 0o700)
+            my_env["GIT_ASKPASS"] = askpass_path
 
         command_to_run = command
         if prepend_with_git:
@@ -199,6 +215,9 @@ class GitService:
             stdout = result.stdout.decode("utf-8")
             stderr = result.stderr.decode("utf-8")
             raise GitCommandError(f"Failed to execute git command: {command_to_run}Stdout: {stdout}Stderr: {stderr}")
+
+        if os.path.exists("/tmp/git_askpass.sh"):
+            os.remove("/tmp/git_askpass.sh")
 
         return result
 
