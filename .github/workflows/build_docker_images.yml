@@ -31,6 +31,7 @@ on:
     branches:
       - main
       - deploy-to-cloud-gov
+      - spiff-sync
       - keycloak-realm-with-groups
     tags: [v*]
 
