@@ -35,6 +35,7 @@ on:
       - fail-fast-off
       - newui-all-in
       - rebuild-v1.0.0
+      - login-gov-signin-flow
     tags: [v*]
 
 jobs:
