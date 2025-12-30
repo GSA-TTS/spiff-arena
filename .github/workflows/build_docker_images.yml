@@ -103,7 +103,9 @@ jobs:
         run: echo "$DOCKER_METADATA_OUTPUT_JSON" | jq '.labels' > version_info.json
       - name: Generate full image tag
         id: full_tag
-        run: echo "full_tag=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ steps.date.outputs.date }}-${{ steps.commit_sha.outputs.sha_short }}" >> "$GITHUB_OUTPUT"
+        run: |
+          SAFE_BRANCH_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+          echo "full_tag=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SAFE_BRANCH_NAME}-${{ steps.date.outputs.date }}-${{ steps.commit_sha.outputs.sha_short }}" >> "$GITHUB_OUTPUT"
       - name: Build Docker image
         uses: docker/build-push-action@v6.18.0
         with:
