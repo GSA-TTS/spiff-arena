@@ -32,11 +32,20 @@ class ProcessInstanceLockService:
         return index
 
     @classmethod
+    def _context_key(cls) -> tuple[Any, int]:
+        """Return a unique key for the current execution context.
+
+        The key combines process_index (for Celery workers) and thread_id (for threaded web workers).
+        This ensures that different threads in the same process don't share/overwrite each other's locks.
+        """
+        return (cls.get_current_process_index(), threading.get_ident())
+
+    @classmethod
     def set_thread_local_locking_context(cls, domain: str) -> None:
         tld = current_app.config["THREAD_LOCAL_DATA"]
         if not hasattr(tld, "lock_service_context"):
             tld.lock_service_context = {}
-        tld.lock_service_context[cls.get_current_process_index()] = {
+        tld.lock_service_context[cls._context_key()] = {
             "domain": domain,
             "uuid": current_app.config["PROCESS_UUID"],
             "thread_id": threading.get_ident(),
@@ -48,7 +57,7 @@ class ProcessInstanceLockService:
         tld = current_app.config["THREAD_LOCAL_DATA"]
         if not hasattr(tld, "lock_service_context"):
             cls.set_thread_local_locking_context("web")
-        return tld.lock_service_context[cls.get_current_process_index()]  # type: ignore
+        return tld.lock_service_context[cls._context_key()]  # type: ignore
 
     @classmethod
     def locked_by(cls) -> str:
