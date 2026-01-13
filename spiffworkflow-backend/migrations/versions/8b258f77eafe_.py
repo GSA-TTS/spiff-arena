@@ -26,7 +26,7 @@ def upgrade():
 
 
         batch_op.create_unique_constraint(
-            "process_instance_task_unique", ["process_instance_id", "task_guid"]
+            "process_instance_task_unique", "task_draft_data", ["process_instance_id", "task_guid"]
         )
         batch_op.create_primary_key(
             "process_instance_task_pk", ["process_instance_id", "task_guid"]
