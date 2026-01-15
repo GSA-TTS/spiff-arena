@@ -117,6 +117,7 @@ if [[ -n "${PROMETHEUS_MULTIPROC_DIR:-}" ]]; then
   rm -rf "$prometheus_multiproc_dir_resolved"
   mkdir -p "$prometheus_multiproc_dir_resolved"
 fi
+uv run python bin/bootstrap.py
 
 log_info "Starting gunicorn server"
 # THIS MUST BE THE LAST COMMAND!

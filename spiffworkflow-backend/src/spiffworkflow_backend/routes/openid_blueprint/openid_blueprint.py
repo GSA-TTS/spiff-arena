@@ -141,6 +141,7 @@ def token() -> Response:
         {
             "iss": f"{host_url}{url_for('openid.index')}",
             "aud": client_id,
+            "azp": client_id[0],
             "iat": math.floor(time.time()),
             "exp": round(time.time()) + two_days,
             "sub": user_name,
@@ -155,6 +156,7 @@ def token() -> Response:
         "access_token": id_token,
         "id_token": id_token,
         "refresh_token": id_token,
+        "token_type": "Bearer",
     }
     return make_response(jsonify(response), 200)
 
