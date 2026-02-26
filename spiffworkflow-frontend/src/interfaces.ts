@@ -353,6 +353,7 @@ export interface ProcessGroup {
   process_groups?: ProcessGroup[];
   parent_groups?: ProcessGroupLite[];
   messages?: Messages;
+  allowed_imports?: string[];
 }
 
 export interface HotCrumbItemObject {

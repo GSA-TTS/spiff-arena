@@ -17,6 +17,7 @@ PROCESS_GROUP_SUPPORTED_KEYS_FOR_DISK_SERIALIZATION = [
     "messages",
     "correlation_keys",
     "correlation_properties",
+    "allowed_imports",
 ]
 
 
@@ -27,6 +28,7 @@ PROCESS_GROUP_KEYS_TO_UPDATE_FROM_API = [
     "data_store_specifications",
     "correlation_keys",
     "correlation_properties",
+    "allowed_imports",
 ]
 
 
@@ -44,6 +46,7 @@ class ProcessGroup:
     messages: dict[str, Any] | None = None
     correlation_keys: list[dict[str, Any]] | None = None
     correlation_properties: list[CorrelationProperty] | None = None
+    allowed_imports: list[str] | None = None
 
     # TODO: delete these once they no no longer mentioned in current
     # process_group.json files
