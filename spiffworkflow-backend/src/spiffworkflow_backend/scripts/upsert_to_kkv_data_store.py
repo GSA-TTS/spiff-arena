@@ -34,11 +34,7 @@ def _upsert_by_name(holder: list[dict[str, Any]], vars_array: list[dict[str, Any
     If an entry with the same name already exists in holder, it is replaced.
     Otherwise, the new entry is appended.
     """
-    index: dict[str, int] = {
-        it.get("name"): i
-        for i, it in enumerate(holder)
-        if "name" in it  # type: ignore[misc]
-    }
+    index: dict[str, int] = {str(it["name"]): i for i, it in enumerate(holder) if "name" in it}
     for item in vars_array:
         name = item.get("name")
         if not name:
@@ -82,7 +78,7 @@ class UpsertToKkvDataStore(Script):
         if not callable(data_store_reader):
             raise ValueError(f"First argument must be a callable data store reader, got {type(data_store_reader).__name__}.")
 
-        if not isinstance(vars_array, (list, tuple)):
+        if not isinstance(vars_array, list | tuple):
             raise ValueError(f"vars_array must be a list, got {type(vars_array).__name__}.")
 
         # 1) Read the current bucket from the data store
@@ -91,7 +87,7 @@ class UpsertToKkvDataStore(Script):
             holder = []
 
         # 2) Upsert vars_array into holder by name
-        holder = _upsert_by_name(holder, vars_array)
+        holder = _upsert_by_name(holder, list(vars_array))
 
         # 3) Return the write-back dict for assignment
         result = {key1: {key2: holder}}

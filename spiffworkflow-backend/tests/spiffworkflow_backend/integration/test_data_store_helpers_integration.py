@@ -42,12 +42,14 @@ def _make_reader(store: dict[str, dict[str, list[dict[str, Any]]]]) -> Any:
     return reader
 
 
-def _transform(task_data: dict, field_names: Any, key_values: list[str], **kwargs: Any) -> dict:
-    return TransformTaskDataToDataStore().run(_ctx(task_data), field_names, key_values, **kwargs)
+def _transform(task_data: dict, field_names: Any, key_values: list[str], **kwargs: Any) -> dict[str, Any]:
+    result: dict[str, Any] = TransformTaskDataToDataStore().run(_ctx(task_data), field_names, key_values, **kwargs)
+    return result
 
 
-def _upsert(reader: Any, vars_array: list[dict[str, Any]], key1: str, key2: str) -> dict:
-    return UpsertToKkvDataStore().run(_ctx({}), reader, vars_array, key1, key2)
+def _upsert(reader: Any, vars_array: list[dict[str, Any]], key1: str, key2: str) -> dict[str, Any]:
+    result: dict[str, Any] = UpsertToKkvDataStore().run(_ctx({}), reader, vars_array, key1, key2)
+    return result
 
 
 def _pipeline(
@@ -110,7 +112,10 @@ class TestDynamicSchemaFieldsPipeline:
         assert len(holder) == 3
         assert holder[0] == {"name": "publicHealthImpacts", "value": "UPDATED impact"}
         assert holder[1] == {"name": "exclusionsText", "value": "keep me"}
-        assert holder[2] == {"name": "naturalResourcesImpacts", "value": "new assessment"}
+        assert holder[2] == {
+            "name": "naturalResourcesImpacts",
+            "value": "new assessment",
+        }
 
     def test_nine_ec_fields_from_schema(self) -> None:
         """Simulates all 9 EC form fields from hellocedata schema."""
@@ -617,7 +622,7 @@ class TestPipelineEdgeCases:
         """If the KKV store returns a non-list (corrupt data), holder resets to []."""
 
         def bad_reader(k1: str, k2: str) -> str:
-            return "not a list"  # type: ignore
+            return "not a list"
 
         result = _pipeline({"field": "value"}, "field", bad_reader, "pid", "model")
         assert result["pid"]["model"] == [{"name": "field", "value": "value"}]

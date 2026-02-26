@@ -25,8 +25,9 @@ def _ctx(task_data: dict) -> ScriptAttributesContext:
     )
 
 
-def _run(task_data: dict, field_names: Any, key_values: list[str], **kwargs: Any) -> dict:
-    return TransformTaskDataToDataStore().run(_ctx(task_data), field_names, key_values, **kwargs)
+def _run(task_data: dict, field_names: Any, key_values: list[str], **kwargs: Any) -> dict[str, Any]:
+    result: dict[str, Any] = TransformTaskDataToDataStore().run(_ctx(task_data), field_names, key_values, **kwargs)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +181,7 @@ class TestEdgeCases:
 
     def test_invalid_field_names_type_raises(self) -> None:
         with pytest.raises(ValueError, match="field_names must be"):
-            _run({"a": 1}, 123, ["M", "P"])  # type: ignore
+            _run({"a": 1}, 123, ["M", "P"])
 
     def test_missing_key_values_raises(self) -> None:
         with pytest.raises(ValueError, match="key_values"):

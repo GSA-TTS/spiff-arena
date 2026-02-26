@@ -38,8 +38,9 @@ def _run(
     vars_array: list[dict[str, Any]],
     key1: str,
     key2: str,
-) -> dict:
-    return UpsertToKkvDataStore().run(_ctx(), reader, vars_array, key1, key2)
+) -> dict[str, Any]:
+    result: dict[str, Any] = UpsertToKkvDataStore().run(_ctx(), reader, vars_array, key1, key2)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +124,7 @@ class TestUpsertToKkvDataStore:
     def test_multiple_fields_upsert(self) -> None:
         """Simulates the EC forced_vars pattern with multiple fields."""
         reader = _make_reader({"pid": {"model": [{"name": "publicHealthImpacts", "value": "old"}]}})
-        vars_array = [
+        vars_array: list[dict[str, Any]] = [
             {"name": "publicHealthImpacts", "value": "updated"},
             {"name": "naturalResourcesImpacts", "value": "new"},
             {"name": "controversialEffects", "value": None},
@@ -182,7 +183,7 @@ class TestUpsertErrors:
 
     def test_non_callable_reader_raises(self) -> None:
         with pytest.raises(ValueError, match="callable data store reader"):
-            _run("not_a_function", [{"name": "a", "value": 1}], "pid", "model")  # type: ignore
+            _run("not_a_function", [{"name": "a", "value": 1}], "pid", "model")
 
     def test_non_list_vars_array_raises(self) -> None:
         reader = _make_reader({})
@@ -200,7 +201,7 @@ class TestIntegrationWithTransform:
     def test_transform_output_feeds_into_upsert(self) -> None:
         """Simulates the combined pipeline."""
         # Simulate transform output
-        transform_result = {
+        transform_result: dict[str, Any] = {
             "data": [
                 {"name": "exclusionsText", "value": "CE text here"},
             ],
@@ -219,7 +220,7 @@ class TestIntegrationWithTransform:
         """Simulates the nepareport/ipac_report dict-remapping + upsert pipeline."""
         # transform_task_data_to_data_store({"nepareport": "nepareport", "ipac_report": "ipacreport"}, ...)
         # would produce:
-        transform_result = {
+        transform_result: dict[str, Any] = {
             "data": [
                 {"name": "nepareport", "value": {"report_data": "nepa"}},
                 {"name": "ipacreport", "value": {"report_data": "ipac"}},
