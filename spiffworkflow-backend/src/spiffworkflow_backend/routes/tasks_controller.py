@@ -687,6 +687,7 @@ def _interstitial_stream(
     process_instance: ProcessInstanceModel,
     execute_tasks: bool = True,
     is_locked: bool = False,
+    with_console: bool = False,
 ) -> Generator[str, str | None, None]:
     def get_reportable_tasks(processor: ProcessInstanceProcessor) -> Any:
         return processor.bpmn_process_instance.get_tasks(
@@ -733,8 +734,18 @@ def _interstitial_stream(
                 try:
                     # run_until_user_message does not run tasks with instructions so run readys first
                     # to force it to run the task.
-                    processor.do_engine_steps(execution_strategy_name="run_current_ready_tasks")
-                    processor.do_engine_steps(execution_strategy_name="run_until_user_message")
+                    if with_console:
+                        from spiffworkflow_backend.services.console_output_service import console_capture
+
+                        with console_capture() as console_buf:
+                            processor.do_engine_steps(execution_strategy_name="run_current_ready_tasks")
+                            processor.do_engine_steps(execution_strategy_name="run_until_user_message")
+                        console_lines = console_buf.drain()
+                        if console_lines:
+                            yield _render_data("console", {"lines": console_lines})
+                    else:
+                        processor.do_engine_steps(execution_strategy_name="run_current_ready_tasks")
+                        processor.do_engine_steps(execution_strategy_name="run_until_user_message")
                     processor.save()  # Fixme - maybe find a way not to do this on every loop?
                     processor.refresh_waiting_tasks()
 
@@ -810,7 +821,7 @@ def _get_ready_engine_step_count(bpmn_process_instance: BpmnWorkflow) -> int:
 
 
 def _dequeued_interstitial_stream(
-    process_instance_id: int, execute_tasks: bool = True
+    process_instance_id: int, execute_tasks: bool = True, with_console: bool = False
 ) -> Generator[str | None, str | None, None]:
     try:
         process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
@@ -822,7 +833,9 @@ def _dequeued_interstitial_stream(
                 if not ProcessInstanceTmpService.is_enqueued_to_run_in_the_future(process_instance):
                     with ProcessInstanceQueueService.dequeued(process_instance):
                         ProcessInstanceMigrator.run(process_instance)
-                        yield from _interstitial_stream(process_instance, execute_tasks=execute_tasks)
+                        yield from _interstitial_stream(
+                            process_instance, execute_tasks=execute_tasks, with_console=with_console
+                        )
             except ProcessInstanceIsAlreadyLockedError:
                 yield from _interstitial_stream(process_instance, execute_tasks=False, is_locked=True)
         else:
@@ -851,11 +864,15 @@ def _dequeued_interstitial_stream(
         yield _render_data("error", api_error)
 
 
-def interstitial(process_instance_id: int, execute_tasks: bool = True) -> Response:
+def interstitial(process_instance_id: int, execute_tasks: bool = True, with_console: bool = False) -> Response:
     """A Server Side Events Stream for watching the execution of engine tasks."""
     try:
         return Response(
-            stream_with_context(_dequeued_interstitial_stream(process_instance_id, execute_tasks=execute_tasks)),
+            stream_with_context(
+                _dequeued_interstitial_stream(
+                    process_instance_id, execute_tasks=execute_tasks, with_console=with_console
+                )
+            ),
             mimetype="text/event-stream",
             headers={"X-Accel-Buffering": "no"},
         )
@@ -873,7 +890,7 @@ def interstitial(process_instance_id: int, execute_tasks: bool = True) -> Respon
         raise api_error from ex
 
 
-def _render_data(return_type: str, entity: ApiError | Task | ProcessInstanceModel) -> str:
+def _render_data(return_type: str, entity: ApiError | Task | ProcessInstanceModel | dict) -> str:
     return_hash: dict = {"type": return_type}
     return_hash[return_type] = entity
     return f"data: {current_app.json.dumps(return_hash)} \n\n"
