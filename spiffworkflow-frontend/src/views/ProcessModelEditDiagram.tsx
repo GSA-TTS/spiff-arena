@@ -13,6 +13,7 @@ import {
 } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
+  Box,
   ButtonGroup,
   Stack,
   TextareaAutosize,
@@ -36,6 +37,8 @@ import HttpService from '../services/HttpService';
 import ReactDiagramEditor from '../components/ReactDiagramEditor';
 import ReactFormBuilder from '../components/ReactFormBuilder/ReactFormBuilder';
 import ProcessBreadcrumb from '../components/ProcessBreadcrumb';
+import PythonEditorPanel from '../components/PythonEditorPanel';
+import ResizeDragHandle from '../components/ResizeDragHandle';
 import useAPIError from '../hooks/UseApiError';
 import {
   useBpmnEditorCallbacks,
@@ -59,6 +62,7 @@ import {
   closeJsonSchemaEditorWithUpdate,
   closeMessageEditorAndRefresh,
   closeScriptEditorWithUpdate,
+  useCodeModuleManager,
 } from '../../packages/bpmn-js-spiffworkflow-react/src';
 import type { DiagramNavigationItem } from '../../packages/bpmn-js-spiffworkflow-react/src';
 import { spiffBpmnApiService } from '../services/SpiffBpmnApiService';
@@ -181,6 +185,24 @@ export default function ProcessModelEditDiagram() {
   const [bpmnXmlForDiagramRendering, setBpmnXmlForDiagramRendering] =
     useState(null);
 
+  const {
+    codeModuleContent,
+    isDirty: codeModuleIsDirty,
+    onTaskAdded,
+    onTaskRemoved,
+    onTaskTypeChanged,
+    loadContent: loadCodeModule,
+    setRawContent: setCodeModuleRawContent,
+    markSaved: markCodeModuleSaved,
+  } = useCodeModuleManager();
+
+  const [showPythonPanel, setShowPythonPanel] = useState<boolean>(
+    () => localStorage.getItem('spiff_python_panel_open') === 'true',
+  );
+  const [pythonPanelHeight, setPythonPanelHeight] = useState<number>(() =>
+    parseInt(localStorage.getItem('spiff_python_panel_height') || '300', 10),
+  );
+
   // CRITICAL: params.process_model_id is ALREADY colon-separated from URL!
   const modifiedProcessModelId = params.process_model_id || '';
 
@@ -229,6 +251,17 @@ export default function ProcessModelEditDiagram() {
   }, []);
 
   useEffect(() => {
+    localStorage.setItem('spiff_python_panel_open', String(showPythonPanel));
+  }, [showPythonPanel]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      'spiff_python_panel_height',
+      String(pythonPanelHeight),
+    );
+  }, [pythonPanelHeight]);
+
+  useEffect(() => {
     const fileResult = (result: any) => {
       setProcessModelFile(result);
       setBpmnXmlForDiagramRendering(result.file_contents);
@@ -245,8 +278,25 @@ export default function ProcessModelEditDiagram() {
         path: `/${processModelPath}/files/${params.file_name}`,
         successCallback: fileResult,
       });
+
+      // Also fetch the companion code module (.py file)
+      if (params.file_name.endsWith('.bpmn')) {
+        const codeModuleFileName = params.file_name.replace('.bpmn', '.py');
+        HttpService.makeCallToBackend({
+          path: `/${processModelPath}/files/${codeModuleFileName}`,
+          successCallback: (result: any) => {
+            if (result.file_contents) {
+              loadCodeModule(result.file_contents);
+            }
+          },
+          failureCallback: () => {
+            // Code module doesn't exist yet — initialize empty
+            loadCodeModule('');
+          },
+        });
+      }
     }
-  }, [processModelPath, params.file_name]);
+  }, [processModelPath, params.file_name, loadCodeModule]);
 
   useEffect(() => {
     const bpmnProcessIds = processModelFile?.bpmn_process_ids;
@@ -392,6 +442,37 @@ export default function ProcessModelEditDiagram() {
     // so it does not get used over the params
     setNewFileName('');
     setDiagramHasChanges(false);
+
+    // Save the companion code module (.py file) if it has changes
+    const effectiveFileName = fileNameWithExtension;
+    if (codeModuleIsDirty && effectiveFileName?.endsWith('.bpmn')) {
+      const codeModuleFileName = effectiveFileName.replace('.bpmn', '.py');
+      const codeModuleFile = new File([codeModuleContent], codeModuleFileName);
+      const codeModuleFormData = new FormData();
+      codeModuleFormData.append('file', codeModuleFile);
+      codeModuleFormData.append('fileName', codeModuleFileName);
+
+      // Use PUT if the file exists, POST if it's new
+      const codeModuleExists = processModel?.files?.some(
+        (f: any) => f.name === codeModuleFileName,
+      );
+      let codeModuleUrl = `/process-models/${modifiedProcessModelId}/files`;
+      let codeModuleHttpMethod = 'POST';
+      if (codeModuleExists) {
+        codeModuleUrl += `/${codeModuleFileName}`;
+        codeModuleHttpMethod = 'PUT';
+      }
+
+      HttpService.makeCallToBackend({
+        path: codeModuleUrl,
+        httpMethod: codeModuleHttpMethod,
+        postBody: codeModuleFormData,
+        successCallback: () => {
+          markCodeModuleSaved();
+        },
+        failureCallback: addError,
+      });
+    }
   };
 
   const onElementsChanged = useCallback(() => {
@@ -1154,13 +1235,13 @@ export default function ProcessModelEditDiagram() {
     ) {
       onSetPrimaryFileCallback = onSetPrimaryFile;
     }
-    return (
+    const bpmnEditor = (
       <ReactDiagramEditor
         activeUserElement={<ActiveUsers />}
         callers={callers}
         diagramType="bpmn"
         diagramXML={bpmnXmlForDiagramRendering}
-        disableSaveButton={!diagramHasChanges}
+        disableSaveButton={!diagramHasChanges && !codeModuleIsDirty}
         fileName={params.file_name}
         isPrimaryFile={params.file_name === processModel?.primary_file_name}
         processModel={processModel}
@@ -1181,6 +1262,9 @@ export default function ProcessModelEditDiagram() {
         onSearchProcessModels={onSearchProcessModels}
         onServiceTasksRequested={bpmnEditorCallbacks.onServiceTasksRequested}
         onSetPrimaryFile={onSetPrimaryFileCallback}
+        onTaskAdded={onTaskAdded}
+        onTaskRemoved={onTaskRemoved}
+        onTaskTypeChanged={onTaskTypeChanged}
         modifiedProcessModelId={modifiedProcessModelId || ''}
         saveDiagram={saveDiagram}
         navigationStack={navigationStack}
@@ -1192,7 +1276,41 @@ export default function ProcessModelEditDiagram() {
           popToIndex(index);
           navigate(buildProcessFilePath(item));
         }}
+        onTogglePythonPanel={() => setShowPythonPanel((prev) => !prev)}
+        showPythonPanel={showPythonPanel}
       />
+    );
+
+    if (!showPythonPanel) {
+      return bpmnEditor;
+    }
+
+    const codeModuleFileName =
+      params.file_name?.replace('.bpmn', '.py') || 'code_module.py';
+
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          height: '90vh',
+        }}
+      >
+        <Box sx={{ flex: 1, minHeight: 100, overflow: 'hidden' }}>
+          {bpmnEditor}
+        </Box>
+        <ResizeDragHandle
+          onResize={setPythonPanelHeight}
+          currentHeight={pythonPanelHeight}
+        />
+        <PythonEditorPanel
+          content={codeModuleContent}
+          onChange={setCodeModuleRawContent}
+          fileName={codeModuleFileName}
+          height={pythonPanelHeight}
+          onClose={() => setShowPythonPanel(false)}
+        />
+      </Box>
     );
   };
 
