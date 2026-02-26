@@ -60,6 +60,9 @@ export interface BpmnEditorProps {
   onSearchProcessModels?: (...args: any[]) => any;
   onServiceTasksRequested?: (...args: any[]) => any;
   onSetPrimaryFile?: (...args: any[]) => any;
+  onTaskAdded?: (elementId: string, elementType: string) => void;
+  onTaskRemoved?: (elementId: string) => void;
+  onTaskTypeChanged?: (elementId: string, oldType: string, newType: string) => void;
   saveDiagram?: (...args: any[]) => any;
 }
 

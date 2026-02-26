@@ -109,6 +109,9 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
       onMessagesRequested,
       onSearchProcessModels,
       onServiceTasksRequested,
+      onTaskAdded,
+      onTaskRemoved,
+      onTaskTypeChanged,
     },
     ref,
   ) => {
@@ -136,6 +139,9 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
       onMessagesRequested,
       onSearchProcessModels,
       onServiceTasksRequested,
+      onTaskAdded,
+      onTaskRemoved,
+      onTaskTypeChanged,
     });
 
     // Update callbacks ref when callbacks change
@@ -156,6 +162,9 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
         onMessagesRequested,
         onSearchProcessModels,
         onServiceTasksRequested,
+        onTaskAdded,
+        onTaskRemoved,
+        onTaskTypeChanged,
       };
     }, [
       onCallActivityOverlayClick,
@@ -173,6 +182,9 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
       onMessagesRequested,
       onSearchProcessModels,
       onServiceTasksRequested,
+      onTaskAdded,
+      onTaskRemoved,
+      onTaskTypeChanged,
     ]);
 
     const fitViewportWithPaletteOffset = (canvas: any) => {
@@ -622,6 +634,152 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
           callbacksRef.current.onLaunchMessageEditor(event);
         }
       });
+
+      // --- Code module: task lifecycle event handling ---
+      const TASK_ELEMENT_TYPES = new Set([
+        'bpmn:Task',
+        'bpmn:UserTask',
+        'bpmn:ManualTask',
+        'bpmn:ScriptTask',
+        'bpmn:ServiceTask',
+        'bpmn:SendTask',
+        'bpmn:ReceiveTask',
+        'bpmn:BusinessRuleTask',
+        'bpmn:CallActivity',
+        'bpmn:SubProcess',
+      ]);
+
+      function isTaskElementType(elementType: string): boolean {
+        return TASK_ELEMENT_TYPES.has(elementType);
+      }
+
+      const elementTypeCache: Record<string, string> = {};
+      const pendingDeleteTimers: Record<
+        string,
+        ReturnType<typeof setTimeout>
+      > = {};
+
+      if (diagramType !== 'readonly') {
+        // Populate cache on import
+        diagramModeler.on('import.done', () => {
+          const elementRegistry = diagramModeler.get('elementRegistry');
+          elementRegistry.forEach((el: any) => {
+            if (el.type && isTaskElementType(el.type)) {
+              elementTypeCache[el.id] = el.type;
+            }
+          });
+        });
+
+        diagramModeler.on(
+          'commandStack.shape.create.postExecute',
+          (event: any) => {
+            const element = event.context?.shape;
+            if (!element || !isTaskElementType(element.type)) {
+              return;
+            }
+
+            const cachedType = elementTypeCache[element.id];
+
+            // Cancel any pending delete for this ID (handles type change: delete + create)
+            if (pendingDeleteTimers[element.id]) {
+              clearTimeout(pendingDeleteTimers[element.id]);
+              delete pendingDeleteTimers[element.id];
+            }
+
+            if (cachedType && cachedType !== element.type) {
+              // Type change detected
+              callbacksRef.current.onTaskTypeChanged?.(
+                element.id,
+                cachedType,
+                element.type,
+              );
+              // For new ScriptTask, set the main script
+              if (
+                element.type === 'bpmn:ScriptTask' &&
+                !element.businessObject.script
+              ) {
+                const cmdStack = diagramModeler.get('commandStack');
+                cmdStack.execute('element.updateModdleProperties', {
+                  element,
+                  moddleElement: element.businessObject,
+                  properties: { script: `${element.id}_script()` },
+                });
+              }
+            } else if (!cachedType) {
+              // Genuinely new element — set default pre/post scripts
+              const moddle = diagramModeler.get('moddle');
+              const cmdStack = diagramModeler.get('commandStack');
+              const { businessObject } = element;
+
+              let { extensionElements } = businessObject;
+              if (!extensionElements) {
+                extensionElements = moddle.create('bpmn:ExtensionElements');
+                extensionElements.values = [];
+              }
+
+              // Only add if not already present
+              const hasPreScript = extensionElements.values?.some(
+                (v: any) => v.$type === 'spiffworkflow:PreScript',
+              );
+              const hasPostScript = extensionElements.values?.some(
+                (v: any) => v.$type === 'spiffworkflow:PostScript',
+              );
+
+              if (!hasPreScript) {
+                const preScript = moddle.create('spiffworkflow:PreScript');
+                preScript.value = `${element.id}_pre()`;
+                extensionElements.get('values').push(preScript);
+              }
+              if (!hasPostScript) {
+                const postScript = moddle.create('spiffworkflow:PostScript');
+                postScript.value = `${element.id}_post()`;
+                extensionElements.get('values').push(postScript);
+              }
+
+              cmdStack.execute('element.updateModdleProperties', {
+                element,
+                moddleElement: businessObject,
+                properties: { extensionElements },
+              });
+
+              if (
+                element.type === 'bpmn:ScriptTask' &&
+                !businessObject.script
+              ) {
+                cmdStack.execute('element.updateModdleProperties', {
+                  element,
+                  moddleElement: businessObject,
+                  properties: { script: `${element.id}_script()` },
+                });
+              }
+
+              callbacksRef.current.onTaskAdded?.(element.id, element.type);
+            }
+
+            elementTypeCache[element.id] = element.type;
+          },
+        );
+
+        diagramModeler.on(
+          'commandStack.shape.delete.postExecute',
+          (event: any) => {
+            const element = event.context?.shape;
+            if (!element || !isTaskElementType(element.type)) {
+              return;
+            }
+
+            // Debounce: type changes fire delete then create with same ID
+            pendingDeleteTimers[element.id] = setTimeout(() => {
+              delete pendingDeleteTimers[element.id];
+              const elementRegistry = diagramModeler.get('elementRegistry');
+              if (!elementRegistry.get(element.id)) {
+                callbacksRef.current.onTaskRemoved?.(element.id);
+                delete elementTypeCache[element.id];
+              }
+            }, 100);
+          },
+        );
+      }
 
       // Register the import.parse.complete handler before any importXML calls
       if (diagramType !== 'dmn') {

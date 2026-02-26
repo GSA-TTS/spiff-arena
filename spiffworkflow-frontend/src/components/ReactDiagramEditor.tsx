@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { Button, Box } from '@mui/material';
+import { Button, Box, IconButton, Tooltip } from '@mui/material';
+import { Code } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -55,11 +56,20 @@ type OwnProps = {
   onSearchProcessModels?: (..._args: any[]) => any;
   onServiceTasksRequested?: (..._args: any[]) => any;
   onSetPrimaryFile?: (..._args: any[]) => any;
+  onTaskAdded?: (elementId: string, elementType: string) => void;
+  onTaskRemoved?: (elementId: string) => void;
+  onTaskTypeChanged?: (
+    elementId: string,
+    oldType: string,
+    newType: string,
+  ) => void;
   saveDiagram?: (..._args: any[]) => any;
   tasks?: BasicTask[] | null;
   url?: string;
   navigationStack?: DiagramNavigationItem[];
   onNavigate?: (index: number) => void;
+  showPythonPanel?: boolean;
+  onTogglePythonPanel?: () => void;
 };
 
 export default function ReactDiagramEditor({
@@ -88,12 +98,17 @@ export default function ReactDiagramEditor({
   onSearchProcessModels,
   onServiceTasksRequested,
   onSetPrimaryFile,
+  onTaskAdded,
+  onTaskRemoved,
+  onTaskTypeChanged,
   modifiedProcessModelId,
   saveDiagram,
   tasks,
   url,
   navigationStack,
   onNavigate,
+  showPythonPanel,
+  onTogglePythonPanel,
 }: OwnProps) {
   const bpmnEditorRef = useRef<BpmnEditorRef>(null);
   const [showingReferences, setShowingReferences] = useState(false);
@@ -301,6 +316,17 @@ export default function ReactDiagramEditor({
           )}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {onTogglePythonPanel && (
+            <Tooltip title={t('diagram_toggle_python_editor')}>
+              <IconButton
+                size="small"
+                onClick={onTogglePythonPanel}
+                color={showPythonPanel ? 'primary' : 'default'}
+              >
+                <Code />
+              </IconButton>
+            </Tooltip>
+          )}
           <div
             className="diagram-toolbar__right"
             style={{ position: 'static', transform: 'none' }}
@@ -342,6 +368,9 @@ export default function ReactDiagramEditor({
         onMessagesRequested={onMessagesRequested}
         onSearchProcessModels={onSearchProcessModels}
         onServiceTasksRequested={onServiceTasksRequested}
+        onTaskAdded={onTaskAdded}
+        onTaskRemoved={onTaskRemoved}
+        onTaskTypeChanged={onTaskTypeChanged}
       />
     </>
   );
