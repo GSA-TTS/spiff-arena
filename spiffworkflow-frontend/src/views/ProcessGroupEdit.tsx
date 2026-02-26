@@ -6,6 +6,7 @@ import { Box, Typography } from '@mui/material';
 import ProcessBreadcrumb from '../components/ProcessBreadcrumb';
 import HttpService from '../services/HttpService';
 import ProcessGroupForm from '../components/ProcessGroupForm';
+import ProcessGroupScripts from '../components/ProcessGroupScripts';
 import { ProcessGroup } from '../interfaces';
 import { setPageTitle } from '../helpers';
 
@@ -56,6 +57,9 @@ export default function ProcessGroupEdit() {
             processGroup={processGroup}
             setProcessGroup={setProcessGroup}
           />
+        </Box>
+        <Box mt={4}>
+          <ProcessGroupScripts processGroupId={processGroup.id} />
         </Box>
       </>
     );
