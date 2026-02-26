@@ -1,7 +1,18 @@
 import { useNavigate } from 'react-router-dom';
-import Button from '@mui/material/Button'; // Updated import for MUI Button
+import { useTranslation } from 'react-i18next';
+import {
+  Button,
+  ButtonGroup,
+  ClickAwayListener,
+  Grow,
+  MenuItem,
+  MenuList,
+  Paper,
+  Popper,
+} from '@mui/material';
+import { ArrowDropDown } from '@mui/icons-material';
 import { Can } from '@casl/react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   PermissionsToCheck,
   ProcessInstance,
@@ -77,8 +88,12 @@ export default function ProcessInstanceRun({
   buttonText = 'Start',
 }: OwnProps) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { addError, removeError } = useAPIError();
   const [disableStartButton, setDisableStartButton] = useState<boolean>(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const startWithConsoleRef = useRef(false);
 
   const modifiedProcessModelId = modifyProcessIdentifierForPathParam(
     processModel.id,
@@ -104,9 +119,12 @@ export default function ProcessInstanceRun({
         `/process-instances/for-me/${modifiedProcessModelId}/${processInstanceId}/progress`,
       );
     } else {
-      navigate(
-        `/process-instances/for-me/${modifiedProcessModelId}/${processInstanceId}/interstitial`,
-      );
+      let interstitialUrl = `/process-instances/for-me/${modifiedProcessModelId}/${processInstanceId}/interstitial`;
+      if (startWithConsoleRef.current) {
+        interstitialUrl += '?with_console=true';
+        startWithConsoleRef.current = false;
+      }
+      navigate(interstitialUrl);
     }
   };
 
@@ -126,9 +144,10 @@ export default function ProcessInstanceRun({
     });
   };
 
-  const processInstanceCreateAndRun = () => {
+  const processInstanceCreateAndRun = (withConsole = false) => {
     removeError();
     setDisableStartButton(true);
+    startWithConsoleRef.current = withConsole;
     HttpService.makeCallToBackend({
       path: processInstanceCreatePath,
       successCallback: processModelRun,
@@ -143,26 +162,78 @@ export default function ProcessInstanceRun({
   let startButton = null;
   if (processModel.primary_file_name && processModel.is_executable) {
     startButton = (
-      <Button
-        data-testid="start-process-instance"
-        onClick={processInstanceCreateAndRun}
+      <ButtonGroup
+        variant="contained"
+        ref={anchorRef}
         className={className}
         disabled={disableStartButton}
-        variant="contained" // MUI specific prop
-        size="medium" // MUI specific prop
       >
-        {buttonText}
-      </Button>
+        <Button
+          data-testid="start-process-instance"
+          onClick={() => processInstanceCreateAndRun(false)}
+          size="medium"
+        >
+          {buttonText}
+        </Button>
+        <Button
+          size="small"
+          onClick={() => setMenuOpen((prev) => !prev)}
+          aria-label={t('start_options')}
+        >
+          <ArrowDropDown />
+        </Button>
+      </ButtonGroup>
     );
   }
+
+  const dropdownMenu = (
+    <Popper
+      open={menuOpen}
+      anchorEl={anchorRef.current}
+      transition
+      disablePortal
+      sx={{ zIndex: 1 }}
+    >
+      {({ TransitionProps, placement }) => (
+        <Grow
+          {...TransitionProps}
+          style={{
+            transformOrigin:
+              placement === 'bottom' ? 'center top' : 'center bottom',
+          }}
+        >
+          <Paper>
+            <ClickAwayListener onClickAway={() => setMenuOpen(false)}>
+              <MenuList autoFocusItem>
+                <MenuItem
+                  onClick={() => {
+                    setMenuOpen(false);
+                    processInstanceCreateAndRun(true);
+                  }}
+                >
+                  {t('start_with_console')}
+                </MenuItem>
+              </MenuList>
+            </ClickAwayListener>
+          </Paper>
+        </Grow>
+      )}
+    </Popper>
+  );
 
   // if checkPermissions is false then assume the page using this component has already checked the permissions
   if (checkPermissions) {
     return (
       <Can I="POST" a={processInstanceCreatePath} ability={ability}>
         {startButton}
+        {dropdownMenu}
       </Can>
     );
   }
-  return startButton;
+  return (
+    <>
+      {startButton}
+      {dropdownMenu}
+    </>
+  );
 }
