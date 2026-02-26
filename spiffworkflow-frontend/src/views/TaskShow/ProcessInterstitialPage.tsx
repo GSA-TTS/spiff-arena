@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 // @ts-ignore
 import { Box } from '@mui/material';
@@ -13,6 +13,8 @@ type OwnProps = {
 export default function ProcessInterstitialPage({ variant }: OwnProps) {
   const { t } = useTranslation();
   const params = useParams();
+  const [searchParams] = useSearchParams();
+  const withConsole = searchParams.get('with_console') === 'true';
 
   // TODO: the next version we should support the pi show page in the new ui
   // let processInstanceShowPageUrl = `/process-instances/for-me/${params.process_model_id}/${params.process_instance_id}`;
@@ -49,6 +51,7 @@ export default function ProcessInterstitialPage({ variant }: OwnProps) {
         processInstanceId={Number(params.process_instance_id)}
         processInstanceShowPageUrl={processInstanceShowPageUrl}
         allowRedirect
+        withConsole={withConsole}
       />
     </Box>
   );

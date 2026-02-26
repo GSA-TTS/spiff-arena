@@ -7,6 +7,7 @@ import { BACKEND_BASE_URL } from '../config';
 import { getBasicHeaders } from '../services/HttpService';
 
 import InstructionsForEndUser from './InstructionsForEndUser';
+import ConsolePanel from './ConsolePanel';
 import { ProcessInstance, ProcessInstanceTask } from '../interfaces';
 import useAPIError from '../hooks/UseApiError';
 import { HUMAN_TASK_TYPES } from '../helpers';
@@ -19,6 +20,7 @@ type OwnProps = {
   smallSpinner?: boolean;
   collapsableInstructions?: boolean;
   executeTasks?: boolean;
+  withConsole?: boolean;
 };
 
 export default function ProcessInterstitial({
@@ -28,6 +30,7 @@ export default function ProcessInterstitial({
   smallSpinner = false,
   collapsableInstructions = false,
   executeTasks = true,
+  withConsole = false,
 }: OwnProps) {
   const [data, setData] = useState<any[]>([]);
   const [lastTask, setLastTask] = useState<any>(null);
@@ -35,43 +38,47 @@ export default function ProcessInterstitial({
   const [isFadingOut, setIsFadingOut] = useState<boolean>(false);
   const [processInstance, setProcessInstance] =
     useState<ProcessInstance | null>(null);
+  const [consoleLines, setConsoleLines] = useState<string[]>([]);
 
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { addError } = useAPIError();
 
   useEffect(() => {
-    fetchEventSource(
-      `${BACKEND_BASE_URL}/tasks/${processInstanceId}?execute_tasks=${executeTasks}`,
-      {
-        headers: getBasicHeaders(),
-        onmessage(ev) {
-          const retValue = JSON.parse(ev.data);
-          if (retValue.type === 'error') {
-            addError(retValue.error);
-          } else if (retValue.type === 'task') {
-            setData((prevData) => [retValue.task, ...prevData]);
-            setLastTask(retValue.task);
-          } else if (retValue.type === 'unrunnable_instance') {
-            setProcessInstance(retValue.unrunnable_instance);
-          }
-        },
-        onerror(error: any) {
-          // if backend returns a 500 then stop attempting to load the task
-          setState('CLOSED');
-          // we know that this server sent events lib gets these sorts of errors when you are on another tab or window while it is working.
-          // it's fine
-          const wasAbortedError = /\baborted\b/.test(error.message);
-          if (!wasAbortedError) {
-            addError(error);
-            throw error;
-          }
-        },
-        onclose() {
-          setState('CLOSED');
-        },
+    let sseUrl = `${BACKEND_BASE_URL}/tasks/${processInstanceId}?execute_tasks=${executeTasks}`;
+    if (withConsole) {
+      sseUrl += '&with_console=true';
+    }
+    fetchEventSource(sseUrl, {
+      headers: getBasicHeaders(),
+      onmessage(ev) {
+        const retValue = JSON.parse(ev.data);
+        if (retValue.type === 'error') {
+          addError(retValue.error);
+        } else if (retValue.type === 'task') {
+          setData((prevData) => [retValue.task, ...prevData]);
+          setLastTask(retValue.task);
+        } else if (retValue.type === 'unrunnable_instance') {
+          setProcessInstance(retValue.unrunnable_instance);
+        } else if (retValue.type === 'console') {
+          setConsoleLines((prev) => [...prev, ...retValue.console.lines]);
+        }
       },
-    );
+      onerror(error: any) {
+        // if backend returns a 500 then stop attempting to load the task
+        setState('CLOSED');
+        // we know that this server sent events lib gets these sorts of errors when you are on another tab or window while it is working.
+        // it's fine
+        const wasAbortedError = /\baborted\b/.test(error.message);
+        if (!wasAbortedError) {
+          addError(error);
+          throw error;
+        }
+      },
+      onclose() {
+        setState('CLOSED');
+      },
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // it is critical to only run this once.
 
@@ -289,6 +296,12 @@ export default function ProcessInterstitial({
       }}
     >
       {innerComponents()}
+      {withConsole && (
+        <ConsolePanel
+          lines={consoleLines}
+          onClear={() => setConsoleLines([])}
+        />
+      )}
     </Box>
   );
 }
