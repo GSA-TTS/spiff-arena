@@ -8,6 +8,7 @@ on:
     branches:
       - main
       - "hotfix/**"
+      - pic-stable
     paths:
       - spiffworkflow-backend/**
       - spiffworkflow-frontend/**
@@ -17,6 +18,7 @@ on:
   pull_request:
     branches:
       - main
+      - pic-stable
     paths:
       - spiffworkflow-backend/**
       - spiffworkflow-frontend/**
