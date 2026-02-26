@@ -197,7 +197,7 @@ def process_group_file_show(modified_process_group_id: str, file_name: str) -> f
     return make_response(jsonify({"name": file_name, "file_contents": content}), 200)
 
 
-def process_group_file_save(modified_process_group_id: str, file_name: str | None = None) -> flask.wrappers.Response:
+def process_group_file_create(modified_process_group_id: str, file_name: str | None = None) -> flask.wrappers.Response:
     """Create or update a .py file in a process group directory."""
     process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
     group_path = FileSystemService.full_path_from_id(process_group_id)
@@ -231,6 +231,11 @@ def process_group_file_save(modified_process_group_id: str, file_name: str | Non
 
     _commit_and_push_to_git(f"User: {g.user.username} saved group script {actual_file_name} in {process_group_id}")
     return make_response(jsonify({"name": actual_file_name, "file_contents": content.decode("utf-8")}), 200)
+
+
+def process_group_file_update(modified_process_group_id: str, file_name: str) -> flask.wrappers.Response:
+    """Update a .py file in a process group directory."""
+    return process_group_file_create(modified_process_group_id, file_name=file_name)
 
 
 def process_group_file_delete(modified_process_group_id: str, file_name: str) -> flask.wrappers.Response:
