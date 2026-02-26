@@ -101,6 +101,11 @@ def process_model_create(
 
     SpecFileService.update_file(process_model_info, f"{process_model_id_for_bpmn_file}.bpmn", contents.encode())
 
+    code_module_template_file = os.path.join(current_app.root_path, "templates", "code_module_for_new_process_model.py")
+    with open(code_module_template_file) as f:
+        code_module_contents = f.read()
+    SpecFileService.update_file(process_model_info, f"{process_model_id_for_bpmn_file}.py", code_module_contents.encode())
+
     _commit_and_push_to_git(f"User: {g.user.username} created process model {process_model_info.id}")
     return make_response(jsonify(process_model_info.to_dict()), 201)
 
