@@ -108,6 +108,15 @@ class FileSystemService:
         )
 
     @classmethod
+    def ancestor_group_directories(cls, process_model_identifier: str) -> list[tuple[str, str]]:
+        """Return (group_id, full_path) tuples for all ancestor groups, outermost first."""
+        segments = process_model_identifier.split("/")
+        return [
+            ("/".join(segments[: i + 1]), cls.full_path_from_id("/".join(segments[: i + 1])))
+            for i in range(len(segments) - 1)
+        ]
+
+    @classmethod
     def get_files(
         cls,
         process_model_info: ProcessModelInfo,
