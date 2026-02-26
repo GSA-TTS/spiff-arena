@@ -19,10 +19,13 @@ Usage in BPMN script tasks:
     )
 """
 
+import logging
 from typing import Any
 
 from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
 from spiffworkflow_backend.scripts.script import Script
+
+logger = logging.getLogger(__name__)
 
 
 def _upsert_by_name(holder: list[dict[str, Any]], vars_array: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -91,4 +94,9 @@ class UpsertToKkvDataStore(Script):
         holder = _upsert_by_name(holder, vars_array)
 
         # 3) Return the write-back dict for assignment
-        return {key1: {key2: holder}}
+        result = {key1: {key2: holder}}
+
+        if kwargs.get("debug", False):
+            logger.info("upsert_to_kkv_data_store result: %s", result)
+
+        return result

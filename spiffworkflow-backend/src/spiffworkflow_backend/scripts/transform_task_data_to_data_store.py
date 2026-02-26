@@ -1,9 +1,12 @@
 """Transform task data fields into the upsert_context shape for KKV data store writes."""
 
+import logging
 from typing import Any
 
 from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
 from spiffworkflow_backend.scripts.script import Script
+
+logger = logging.getLogger(__name__)
 
 
 def _unwrap_value(container: Any) -> Any:
@@ -115,4 +118,9 @@ class TransformTaskDataToDataStore(Script):
 
             vars_array.append(entry)
 
-        return {"data": vars_array, "key": key_values}
+        result = {"data": vars_array, "key": key_values}
+
+        if kwargs.get("debug", False):
+            logger.info("transform_task_data_to_data_store result: %s", result)
+
+        return result
