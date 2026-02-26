@@ -141,3 +141,5 @@ export type {
     RunScriptUnitTestOptions,
     ScriptUnitTestRunPayload,
 } from './hooks/useScriptUnitTestRunner';
+export { useCodeModuleManager } from './hooks/useCodeModuleManager';
+export type { UseCodeModuleManagerReturn } from './hooks/useCodeModuleManager';
