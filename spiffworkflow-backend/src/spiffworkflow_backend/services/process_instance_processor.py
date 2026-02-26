@@ -35,6 +35,7 @@ from SpiffWorkflow.bpmn.util.diff import WorkflowDiff  # type: ignore
 from SpiffWorkflow.bpmn.workflow import BpmnWorkflow  # type: ignore
 from SpiffWorkflow.exceptions import WorkflowException  # type: ignore
 from SpiffWorkflow.serializer.exceptions import MissingSpecError  # type: ignore
+from SpiffWorkflow.spiff.script_engine import CodeModuleEnvironment  # type: ignore
 from SpiffWorkflow.spiff.specs.defaults import ServiceTask  # type: ignore
 
 # fix for StandardLoopTask
@@ -74,6 +75,7 @@ from spiffworkflow_backend.models.task import TaskNotFoundError
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.scripts.script import Script
 from spiffworkflow_backend.services.bpmn_process_service import BpmnProcessService
+from spiffworkflow_backend.services.file_system_service import FileSystemService
 from spiffworkflow_backend.services.jinja_service import JinjaHelpers
 from spiffworkflow_backend.services.logging_service import LoggingService
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceQueueService
@@ -101,6 +103,20 @@ WorkflowCompletedHandler = Callable[[ProcessInstanceModel], None]
 def _import(name: str, glbls: dict[str, Any], *args: Any) -> None:
     if name not in glbls:
         raise ImportError(f"Import not allowed: {name}", name=name)
+
+
+def _console_print(*args: Any, **kwargs: Any) -> None:
+    """Print function for script tasks that writes to the active console buffer if available."""
+    from spiffworkflow_backend.services.console_output_service import get_active_console_buffer
+
+    sep = kwargs.get("sep", " ")
+    end = kwargs.get("end", "\n")
+    text = sep.join(str(a) for a in args) + end
+    buf = get_active_console_buffer()
+    if buf is not None:
+        buf.write(text)
+    else:
+        current_app.logger.info(f"Script print: {text.rstrip()}")
 
 
 # This number is a little arbitrary but seems like a good number.
@@ -132,6 +148,54 @@ class MissingProcessInfoError(Exception):
     pass
 
 
+def _load_code_modules_for_process_model(process_model_identifier: str) -> dict[str, str]:
+    """Load .py files from the process model directory and all ancestor group directories.
+
+    Files in closer scopes (model > child group > parent group) take precedence for bare names.
+    Group-level modules are also available via prefixed names (e.g., 'group.subgroup.module').
+    """
+    code_modules: dict[str, str] = {}
+
+    # Ancestor groups (outermost first) — closer scopes overwrite bare names
+    for group_id, group_path in FileSystemService.ancestor_group_directories(process_model_identifier):
+        if not os.path.isdir(group_path):
+            continue
+        prefix = group_id.replace("/", ".")
+        for item in os.scandir(group_path):
+            if item.is_file() and item.name.endswith(".py"):
+                bare_id = item.name[:-3]
+                with open(item.path) as f:
+                    source = f.read()
+                code_modules[f"{prefix}.{bare_id}"] = source
+                code_modules[bare_id] = source
+
+    # Model directory (no prefix, always wins for bare name)
+    model_path = FileSystemService.full_path_from_id(process_model_identifier)
+    if os.path.isdir(model_path):
+        for item in os.scandir(model_path):
+            if item.is_file() and item.name.endswith(".py"):
+                bare_id = item.name[:-3]
+                with open(item.path) as f:
+                    code_modules[bare_id] = f.read()
+    return code_modules
+
+
+def _collect_allowed_imports_for_process_model(process_model_identifier: str) -> set[str]:
+    """Collect allowed_imports from all ancestor group process_group.json files.
+
+    Returns the union of all allowed_imports lists found in ancestor groups.
+    """
+    allowed: set[str] = set()
+    for group_id, group_path in FileSystemService.ancestor_group_directories(process_model_identifier):
+        json_path = os.path.join(group_path, FileSystemService.PROCESS_GROUP_JSON_FILE)
+        if os.path.isfile(json_path):
+            with open(json_path) as f:
+                data = json.loads(f.read())
+            if data.get("allowed_imports"):
+                allowed.update(data["allowed_imports"])
+    return allowed
+
+
 class BaseCustomScriptEngineEnvironment(BasePythonScriptEngineEnvironment):  # type: ignore
     def user_defined_state(self, external_context: dict[str, Any] | None = None) -> dict[str, Any]:
         return {}
@@ -156,6 +220,26 @@ class BaseCustomScriptEngineEnvironment(BasePythonScriptEngineEnvironment):  # t
 
     def revise_state_with_task_data(self, task: SpiffTask) -> None:
         pass
+
+
+class CodeModuleBasedScriptEngineEnvironment(BaseCustomScriptEngineEnvironment, CodeModuleEnvironment):  # type: ignore
+    def __init__(self, environment_globals: dict[str, Any], code_modules: dict[str, str], restrict_imports: bool = False):
+        self._last_result: dict[str, Any] = {}
+        self._non_user_defined_keys = {"__annotations__"}
+        super().__init__(environment_globals, code_modules=code_modules, restrict_imports=restrict_imports)
+
+    def execute(
+        self,
+        script: str,
+        context: dict[str, Any],
+        external_context: dict[str, Any] | None = None,
+    ) -> bool:
+        super().execute(script, context, external_context)
+        for key in self._non_user_defined_keys:
+            if key in context:
+                context.pop(key)
+        self._last_result = context
+        return True
 
 
 class TaskDataBasedScriptEngineEnvironment(BaseCustomScriptEngineEnvironment, TaskDataEnvironment):  # type: ignore
@@ -285,7 +369,12 @@ class CustomBpmnScriptEngine(PythonScriptEngine):  # type: ignore
     scripts directory available for execution.
     """
 
-    def __init__(self, use_restricted_script_engine: bool = True) -> None:
+    def __init__(
+        self,
+        use_restricted_script_engine: bool = True,
+        code_modules: dict[str, str] | None = None,
+        additional_imports: set[str] | None = None,
+    ) -> None:
         default_globals = {
             "_strptime": _strptime,
             "all": all,
@@ -314,6 +403,13 @@ class CustomBpmnScriptEngine(PythonScriptEngine):  # type: ignore
             **JinjaHelpers.get_helper_mapping(),
         }
 
+        if additional_imports:
+            for module_name in additional_imports:
+                try:
+                    default_globals[module_name] = __import__(module_name)
+                except ImportError:
+                    current_app.logger.warning(f"Could not import '{module_name}' from group allowed_imports")
+
         if os.environ.get("SPIFFWORKFLOW_BACKEND_USE_RESTRICTED_SCRIPT_ENGINE") == "false":
             use_restricted_script_engine = False
 
@@ -321,8 +417,18 @@ class CustomBpmnScriptEngine(PythonScriptEngine):  # type: ignore
             # This will overwrite the standard builtins
             default_globals.update(safe_globals)
             default_globals["__builtins__"]["__import__"] = _import
+            # Add print back (RestrictedPython removes it). Our _console_print writes
+            # to the active console buffer when one exists, otherwise logs the output.
+            default_globals["__builtins__"]["print"] = _console_print
 
-        environment = CustomScriptEngineEnvironment.create(default_globals)
+        if code_modules:
+            environment: BasePythonScriptEngineEnvironment = CodeModuleBasedScriptEngineEnvironment(
+                environment_globals=default_globals,
+                code_modules=code_modules,
+                restrict_imports=use_restricted_script_engine,
+            )
+        else:
+            environment = CustomScriptEngineEnvironment.create(default_globals)
         super().__init__(environment=environment)
 
     def __get_process_instance_id(self) -> Any | None:
@@ -446,6 +552,17 @@ class ProcessInstanceProcessor:
 
         # we want this to be the fully qualified path to the process model including all group subcomponents
         tld.process_model_identifier = f"{process_instance_model.process_model_identifier}"
+
+        # Load code modules (.py files) from the process model directory and ancestor groups.
+        # Collect allowed_imports from ancestor group process_group.json files.
+        # If any are found and we're using the shared default engine, create a per-instance engine.
+        code_modules = _load_code_modules_for_process_model(process_instance_model.process_model_identifier)
+        additional_imports = _collect_allowed_imports_for_process_model(process_instance_model.process_model_identifier)
+        if (code_modules or additional_imports) and self._script_engine is self.__class__._default_script_engine:
+            self._script_engine = CustomBpmnScriptEngine(
+                code_modules=code_modules or None,
+                additional_imports=additional_imports or None,
+            )
 
         self.process_instance_model = process_instance_model
         bpmn_process_spec = None
