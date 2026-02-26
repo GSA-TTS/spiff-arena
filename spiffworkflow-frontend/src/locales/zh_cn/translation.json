@@ -280,6 +280,7 @@
   "new_dmn_file": "新建 DMN 文件",
   "new_json_file": "新建 JSON 文件",
   "new_markdown_file": "新建 Markdown 文件",
+  "new_python_file": "新建 Python 文件",
   "new_process_group": "新建流程组",
   "no_action_required": "您此时无需采取任何操作。",
   "no_additional_instructions": "此流程没有其他说明或信息。",
