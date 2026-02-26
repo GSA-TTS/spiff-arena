@@ -23,6 +23,7 @@ class FileType(SpiffEnum):
     md = "md"
     pdf = "pdf"
     png = "png"
+    py = "py"
     ppt = "ppt"
     pptx = "pptx"
     rtf = "rtf"
@@ -49,6 +50,7 @@ CONTENT_TYPES = {
     "md": "text/plain",
     "pdf": "application/pdf",
     "png": "image/png",
+    "py": "text/x-python",
     "ppt": "application/vnd.ms-powerpoint",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "rtf": "application/rtf",

@@ -86,6 +86,7 @@ export default function ProcessModelTabs({
     'new_dmn_file',
     'new_json_file',
     'new_markdown_file',
+    'new_python_file',
   ];
 
   const addFileComponent = () => {
@@ -115,6 +116,10 @@ export default function ProcessModelTabs({
             } else if (selectedItem === 'new_markdown_file') {
               navigate(
                 `/process-models/${modifiedProcessModelId}/form?file_ext=md`,
+              );
+            } else if (selectedItem === 'new_python_file') {
+              navigate(
+                `/process-models/${modifiedProcessModelId}/form?file_ext=py`,
               );
             }
           }}

@@ -76,6 +76,9 @@ export default function ReactFormEditor() {
     if (fileExtension === 'md') {
       return 'markdown';
     }
+    if (fileExtension === 'py') {
+      return 'python';
+    }
     return 'text';
   })();
 

@@ -55,6 +55,9 @@ export default function ProcessModelFileList({
       if (processModelFile.name.match(/\.(json|md)$/)) {
         return `/process-models/${modifiedProcessModelId}/form/${processModelFile.name}`;
       }
+      if (processModelFile.name.match(/\.py$/)) {
+        return `/process-models/${modifiedProcessModelId}/form/${processModelFile.name}`;
+      }
     }
     return null;
   };
@@ -193,7 +196,7 @@ export default function ProcessModelFileList({
 
   const tags = processModel.files
     .map((processModelFile: ProcessFile) => {
-      if (!processModelFile.name.match(/\.(dmn|bpmn|json|md)$/)) {
+      if (!processModelFile.name.match(/\.(dmn|bpmn|json|md|py)$/)) {
         return undefined;
       }
       const isPrimaryBpmnFile =
