@@ -82,7 +82,7 @@ class TransformTaskDataToDataStore(Script):
         elif isinstance(field_names_arg, dict):
             # dict maps task_data_key -> store_name
             field_pairs = list(field_names_arg.items())
-        elif isinstance(field_names_arg, (list, tuple)):
+        elif isinstance(field_names_arg, list | tuple):
             field_pairs = [(name, name) for name in field_names_arg]
         else:
             raise ValueError(f"field_names must be a str, list, or dict, got {type(field_names_arg).__name__}")
