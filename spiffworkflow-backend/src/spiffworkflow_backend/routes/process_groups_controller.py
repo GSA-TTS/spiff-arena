@@ -1,11 +1,13 @@
 """APIs for dealing with process groups, process models, and process instances."""
 
+import os
 from typing import Any
 
 import flask.wrappers
 from flask import g
 from flask import jsonify
 from flask import make_response
+from flask import request
 
 from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.exceptions.error import NotAuthorizedError
@@ -17,6 +19,7 @@ from spiffworkflow_backend.models.process_group import ProcessGroup
 from spiffworkflow_backend.routes.process_api_blueprint import _commit_and_push_to_git
 from spiffworkflow_backend.routes.process_api_blueprint import _un_modify_modified_process_model_id
 from spiffworkflow_backend.services.authorization_service import AuthorizationService
+from spiffworkflow_backend.services.file_system_service import FileSystemService
 from spiffworkflow_backend.services.message_definition_service import MessageDefinitionService
 from spiffworkflow_backend.services.process_model_service import ProcessModelService
 from spiffworkflow_backend.services.process_model_service import ProcessModelWithInstancesNotDeletableError
@@ -156,3 +159,91 @@ def process_group_move(modified_process_group_identifier: str, new_location: str
     new_process_group = ProcessModelService.process_group_move(original_process_group_id, new_location)
     _commit_and_push_to_git(f"User: {g.user.username} moved process group {original_process_group_id} to {new_process_group.id}")
     return make_response(jsonify(new_process_group), 200)
+
+
+def process_group_file_list(modified_process_group_id: str) -> flask.wrappers.Response:
+    """List .py files in a process group directory."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    group_path = FileSystemService.full_path_from_id(process_group_id)
+    if not os.path.isdir(group_path):
+        raise ApiError(
+            error_code="process_group_not_found",
+            message=f"Process group directory not found: {process_group_id}",
+            status_code=404,
+        )
+
+    files = []
+    for item in os.scandir(group_path):
+        if item.is_file() and item.name.endswith(".py"):
+            with open(item.path) as f:
+                content = f.read()
+            files.append({"name": item.name, "file_contents": content})
+    return make_response(jsonify(files), 200)
+
+
+def process_group_file_show(modified_process_group_id: str, file_name: str) -> flask.wrappers.Response:
+    """Get content of a .py file in a process group directory."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    group_path = FileSystemService.full_path_from_id(process_group_id)
+    file_path = os.path.join(group_path, file_name)
+    if not os.path.isfile(file_path):
+        raise ApiError(
+            error_code="file_not_found",
+            message=f"File not found: {file_name} in group {process_group_id}",
+            status_code=404,
+        )
+    with open(file_path) as f:
+        content = f.read()
+    return make_response(jsonify({"name": file_name, "file_contents": content}), 200)
+
+
+def process_group_file_save(modified_process_group_id: str, file_name: str | None = None) -> flask.wrappers.Response:
+    """Create or update a .py file in a process group directory."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    group_path = FileSystemService.full_path_from_id(process_group_id)
+    if not os.path.isdir(group_path):
+        raise ApiError(
+            error_code="process_group_not_found",
+            message=f"Process group directory not found: {process_group_id}",
+            status_code=404,
+        )
+
+    request_file = request.files.get("file")
+    if request_file is None:
+        raise ApiError(
+            error_code="no_file_provided",
+            message="No file was provided in the request.",
+            status_code=400,
+        )
+
+    actual_file_name = file_name or request_file.filename or "script.py"
+    if not actual_file_name.endswith(".py"):
+        raise ApiError(
+            error_code="invalid_file_type",
+            message="Only .py files are allowed in process group scripts.",
+            status_code=400,
+        )
+
+    file_path = os.path.join(group_path, actual_file_name)
+    content = request_file.stream.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    _commit_and_push_to_git(f"User: {g.user.username} saved group script {actual_file_name} in {process_group_id}")
+    return make_response(jsonify({"name": actual_file_name, "file_contents": content.decode("utf-8")}), 200)
+
+
+def process_group_file_delete(modified_process_group_id: str, file_name: str) -> flask.wrappers.Response:
+    """Delete a .py file from a process group directory."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    group_path = FileSystemService.full_path_from_id(process_group_id)
+    file_path = os.path.join(group_path, file_name)
+    if not os.path.isfile(file_path):
+        raise ApiError(
+            error_code="file_not_found",
+            message=f"File not found: {file_name} in group {process_group_id}",
+            status_code=404,
+        )
+    os.remove(file_path)
+    _commit_and_push_to_git(f"User: {g.user.username} deleted group script {file_name} from {process_group_id}")
+    return make_response(jsonify({"ok": True}), 200)
