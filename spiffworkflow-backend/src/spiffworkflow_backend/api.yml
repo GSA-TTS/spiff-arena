@@ -518,6 +518,110 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProcessGroup"
 
+  /process-groups/{modified_process_group_id}/files:
+    parameters:
+      - name: modified_process_group_id
+        in: path
+        required: true
+        description: The unique id of an existing process group
+        schema:
+          type: string
+    get:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_file_list
+      summary: List .py files in a process group directory
+      tags:
+        - Process Group Files
+      responses:
+        "200":
+          description: An array of script files in the process group
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+    post:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_file_save
+      summary: Create or update a .py file in a process group directory
+      tags:
+        - Process Group Files
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: The saved file metadata and content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+
+  /process-groups/{modified_process_group_id}/files/{file_name}:
+    parameters:
+      - name: modified_process_group_id
+        in: path
+        required: true
+        description: The unique id of an existing process group
+        schema:
+          type: string
+      - name: file_name
+        in: path
+        required: true
+        description: The name of the .py file
+        schema:
+          type: string
+    get:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_file_show
+      summary: Get content of a .py file in a process group directory
+      tags:
+        - Process Group Files
+      responses:
+        "200":
+          description: The file content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+    put:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_file_save
+      summary: Update a .py file in a process group directory
+      tags:
+        - Process Group Files
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: The saved file metadata and content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+    delete:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_file_delete
+      summary: Delete a .py file from a process group directory
+      tags:
+        - Process Group Files
+      responses:
+        "200":
+          description: The file was deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkTrue"
+
   /upsearch-locations:
     parameters:
       - name: location
@@ -2857,6 +2961,13 @@ paths:
         in: query
         required: false
         description: If true, execute ready tasks on the process instance automatically. This causes the process to run forward until it reaches a user task or completes.
+        schema:
+          type: boolean
+          default: false
+      - name: with_console
+        in: query
+        required: false
+        description: If true, capture print() output from script tasks and stream it as console events.
         schema:
           type: boolean
           default: false
