@@ -1,0 +1,23 @@
+from flask.app import Flask
+from starlette.testclient import TestClient
+
+from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from tests.spiffworkflow_backend.helpers.base_test import BaseTest
+from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
+
+
+class TestCodeModules(BaseTest):
+    def test_script_task_can_call_code_module_function(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+    ) -> None:
+        process_model = load_test_spec(
+            "test_group/code_modules",
+            process_model_source_directory="code-modules",
+        )
+        process_instance = self.create_process_instance_from_process_model(process_model)
+        processor = ProcessInstanceProcessor(process_instance)
+        processor.do_engine_steps(save=True)
+        assert processor.get_data()["result"] == 35
