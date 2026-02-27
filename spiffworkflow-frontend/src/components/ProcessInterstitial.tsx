@@ -2,15 +2,16 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { Alert, Box, CircularProgress } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Stack } from '@mui/material';
 import { BACKEND_BASE_URL } from '../config';
-import { getBasicHeaders } from '../services/HttpService';
+import HttpService, { getBasicHeaders } from '../services/HttpService';
 
 import InstructionsForEndUser from './InstructionsForEndUser';
+import CustomForm from './CustomForm';
 import ConsolePanel from './ConsolePanel';
-import { ProcessInstance, ProcessInstanceTask } from '../interfaces';
+import { ProcessInstance, ProcessInstanceTask, Task } from '../interfaces';
 import useAPIError from '../hooks/UseApiError';
-import { HUMAN_TASK_TYPES } from '../helpers';
+import { HUMAN_TASK_TYPES, recursivelyChangeNullAndUndefined } from '../helpers';
 import { getAndRemoveLastProcessInstanceRunLocation } from '../services/LocalStorageService';
 
 type OwnProps = {
@@ -39,18 +40,28 @@ export default function ProcessInterstitial({
   const [processInstance, setProcessInstance] =
     useState<ProcessInstance | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
+  const [activeHumanTask, setActiveHumanTask] = useState<Task | null>(null);
+  const [inlineTaskData, setInlineTaskData] = useState<any>(null);
+  const [formButtonsDisabled, setFormButtonsDisabled] = useState(false);
+  const [sseGeneration, setSseGeneration] = useState(0);
 
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { addError } = useAPIError();
+  const { addError, removeError } = useAPIError();
 
   useEffect(() => {
+    const abortController = new AbortController();
+    setState('RUNNING');
+    setLastTask(null);
+    setData([]);
+
     let sseUrl = `${BACKEND_BASE_URL}/tasks/${processInstanceId}?execute_tasks=${executeTasks}`;
     if (withConsole) {
       sseUrl += '&with_console=true';
     }
     fetchEventSource(sseUrl, {
       headers: getBasicHeaders(),
+      signal: abortController.signal,
       onmessage(ev) {
         const retValue = JSON.parse(ev.data);
         if (retValue.type === 'error') {
@@ -65,10 +76,8 @@ export default function ProcessInterstitial({
         }
       },
       onerror(error: any) {
-        // if backend returns a 500 then stop attempting to load the task
+        if (abortController.signal.aborted) return;
         setState('CLOSED');
-        // we know that this server sent events lib gets these sorts of errors when you are on another tab or window while it is working.
-        // it's fine
         const wasAbortedError = /\baborted\b/.test(error.message);
         if (!wasAbortedError) {
           addError(error);
@@ -76,11 +85,13 @@ export default function ProcessInterstitial({
         }
       },
       onclose() {
+        if (abortController.signal.aborted) return;
         setState('CLOSED');
       },
     });
+    return () => abortController.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // it is critical to only run this once.
+  }, [sseGeneration]);
 
   const shouldRedirectToTask = useCallback(
     (myTask: ProcessInstanceTask): boolean => {
@@ -103,6 +114,37 @@ export default function ProcessInterstitial({
     // Added this separate use effect so that the timer interval will be cleared if
     // we end up redirecting back to the TaskShow page.
     if (shouldRedirectToTask(lastTask)) {
+      if (withConsole) {
+        // Don't redirect — fetch full task data and render form inline
+        if (!activeHumanTask) {
+          HttpService.makeCallToBackend({
+            path: `/tasks/${lastTask.process_instance_id}/${lastTask.id}?with_form_data=true`,
+            successCallback: (result: Task) => {
+              setActiveHumanTask(result);
+              const variableName = result.extensions?.variableName;
+              let taskDataToUse;
+              if (result.saved_form_data) {
+                taskDataToUse = result.saved_form_data;
+              } else if (
+                typeof variableName !== 'undefined' &&
+                variableName != null &&
+                typeof result.data[variableName] !== 'undefined'
+              ) {
+                taskDataToUse = result.data[variableName];
+              } else {
+                taskDataToUse = result.data;
+              }
+              setInlineTaskData(
+                recursivelyChangeNullAndUndefined(taskDataToUse, undefined),
+              );
+            },
+            failureCallback: (error: any) => {
+              addError(error);
+            },
+          });
+        }
+        return undefined;
+      }
       lastTask.properties.instructionsForEndUser = '';
       const timerId = setInterval(() => {
         const taskUrl = `/tasks/${lastTask.process_instance_id}/${lastTask.id}`;
@@ -124,6 +166,7 @@ export default function ProcessInterstitial({
       }, 4000); // Adjust the timeout to match the CSS transition duration
     }
     return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     lastTask,
     navigate,
@@ -132,6 +175,7 @@ export default function ProcessInterstitial({
     shouldRedirectToProcessInstance,
     shouldRedirectToTask,
     state,
+    withConsole,
   ]);
 
   const getLoadingIcon = () => {
@@ -215,6 +259,9 @@ export default function ProcessInterstitial({
       return inlineMessage('', `${message} ${t('no_action_required')}`);
     }
     if (shouldRedirectToTask(myTask)) {
+      if (withConsole) {
+        return getLoadingIcon();
+      }
       return inlineMessage('', t('redirecting'));
     }
     if (myTask?.can_complete && HUMAN_TASK_TYPES.includes(myTask.type)) {
@@ -264,7 +311,119 @@ export default function ProcessInterstitial({
     return index < 4 ? `user_instructions_${index}` : `user_instructions_4`;
   };
 
+  const handleInlineFormSubmit = (formObject: any, _event: any) => {
+    if (formButtonsDisabled || !activeHumanTask) return;
+
+    const dataToSubmit = formObject?.formData;
+    if (!dataToSubmit) return;
+
+    setFormButtonsDisabled(true);
+    removeError();
+    delete dataToSubmit.isManualTask;
+    recursivelyChangeNullAndUndefined(dataToSubmit, null);
+
+    HttpService.makeCallToBackend({
+      path: `/tasks/${activeHumanTask.process_instance_id}/${activeHumanTask.guid}?with_console=true`,
+      httpMethod: 'PUT',
+      postBody: dataToSubmit,
+      successCallback: (result: any) => {
+        if (result.console_lines) {
+          setConsoleLines((prev) => [...prev, ...result.console_lines]);
+        }
+        setActiveHumanTask(null);
+        setInlineTaskData(null);
+        setFormButtonsDisabled(false);
+        setLastTask(null);
+        setData([]);
+        setState('RUNNING');
+        setSseGeneration((prev) => prev + 1);
+      },
+      failureCallback: (error: any) => {
+        addError(error);
+        setFormButtonsDisabled(false);
+      },
+    });
+  };
+
+  const inlineFormElement = () => {
+    if (!activeHumanTask) return null;
+
+    let formUiSchema;
+    let jsonSchema = activeHumanTask.form_schema;
+
+    if (activeHumanTask.typename !== 'UserTask') {
+      jsonSchema = {
+        type: 'object',
+        required: [],
+        properties: {
+          isManualTask: {
+            type: 'boolean',
+            title: 'Is ManualTask',
+            default: true,
+          },
+        },
+      };
+      formUiSchema = {
+        isManualTask: {
+          'ui:widget': 'hidden',
+        },
+      };
+    } else if (activeHumanTask.form_ui_schema) {
+      formUiSchema = activeHumanTask.form_ui_schema;
+    }
+
+    let submitButtonText = t('submit');
+    if (activeHumanTask.typename === 'ManualTask') {
+      submitButtonText = t('continue');
+    } else if (formUiSchema) {
+      const submitButtonOptions =
+        formUiSchema['ui:submitButtonOptions'] ||
+        formUiSchema['ui:options']?.submitButtonOptions ||
+        {};
+      if ('submitText' in submitButtonOptions) {
+        submitButtonText = submitButtonOptions.submitText as string;
+      }
+    }
+
+    return (
+      <Box className="limited-width-for-readability">
+        <CustomForm
+          id={`inline-form-${activeHumanTask.guid}`}
+          key={`inline-form-${activeHumanTask.guid}`}
+          disabled={formButtonsDisabled}
+          formData={inlineTaskData}
+          onChange={(obj: any) => setInlineTaskData(obj.formData)}
+          onSubmit={handleInlineFormSubmit}
+          schema={jsonSchema}
+          uiSchema={formUiSchema}
+        >
+          <Stack direction="row" spacing={2}>
+            <Button
+              type="submit"
+              id="submit-button"
+              disabled={formButtonsDisabled}
+              variant="contained"
+            >
+              {submitButtonText}
+            </Button>
+          </Stack>
+        </CustomForm>
+      </Box>
+    );
+  };
+
   const innerComponents = () => {
+    if (activeHumanTask) {
+      return (
+        <>
+          <InstructionsForEndUser
+            task={activeHumanTask}
+            className="with-bottom-margin"
+          />
+          {inlineFormElement()}
+        </>
+      );
+    }
     if (lastTask) {
       return (
         <>
