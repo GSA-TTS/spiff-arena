@@ -45,9 +45,11 @@ class FileSystemService:
                 yield file
             depth += 1
 
+    EXCLUDED_DIRS = {".git", ".packages"}
+
     @classmethod
     def non_git_dir(cls, dirname: str, depth: int) -> bool:
-        return dirname != ".git"
+        return dirname not in cls.EXCLUDED_DIRS
 
     @classmethod
     def not_recursive(cls, dirname: str, depth: int) -> bool:
