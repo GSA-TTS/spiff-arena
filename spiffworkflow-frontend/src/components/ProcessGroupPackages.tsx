@@ -109,6 +109,8 @@ export default function ProcessGroupPackages({ processGroupId }: OwnProps) {
           }}
           disabled={installing}
           sx={{ flexGrow: 1 }}
+          data-testid="package-name-input"
+          inputProps={{ 'data-testid': 'package-name-input-field' }}
         />
         <Button
           startIcon={installing ? <CircularProgress size={16} /> : <Add />}
@@ -116,6 +118,7 @@ export default function ProcessGroupPackages({ processGroupId }: OwnProps) {
           size="small"
           onClick={handleInstall}
           disabled={installing || !newPackageName.trim()}
+          data-testid="install-package-button"
         >
           {installing ? t('installing') : t('install')}
         </Button>
@@ -130,11 +133,13 @@ export default function ProcessGroupPackages({ processGroupId }: OwnProps) {
           {packages.map((pkg) => (
             <ListItem
               key={pkg.name}
+              data-testid={`package-list-item-${pkg.name}`}
               secondaryAction={
                 <Tooltip title={t('uninstall')}>
                   <IconButton
                     size="small"
                     onClick={() => handleUninstall(pkg.name)}
+                    data-testid={`uninstall-package-button-${pkg.name}`}
                   >
                     <Delete fontSize="small" />
                   </IconButton>
