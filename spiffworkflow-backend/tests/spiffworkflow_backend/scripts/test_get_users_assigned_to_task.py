@@ -106,16 +106,8 @@ class TestGetUsersAssignedToTask(BaseTest):
         )
         db.session.commit()
 
-        # Build a lightweight "task" object that looks like what ScriptAttributesContext expects:
-        # it just needs a .human_tasks attribute.
-        class FakeSpiffTask:
-            def __init__(self, human_tasks):
-                self.human_tasks = human_tasks
-
-        spiff_task = FakeSpiffTask([humantask1, humantask2])
-
         script_attributes_context = ScriptAttributesContext(
-            task=spiff_task,
+            task=task_model,
             environment_identifier="testing",
             process_instance_id=process_instance_id,
             process_model_identifier="test_process_model",

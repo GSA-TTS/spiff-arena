@@ -2,11 +2,14 @@
 
 from typing import Any
 
-from flask import g
-
 from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
 from spiffworkflow_backend.scripts.script import Script
 
+from spiffworkflow_backend.models.db import db
+from spiffworkflow_backend.models.human_task import HumanTaskModel
+from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
+from spiffworkflow_backend.models.user import UserModel
+from spiffworkflow_backend.models.task import TaskModel
 
 class GetUsersAssignedToTask(Script):
     @staticmethod
@@ -18,22 +21,21 @@ class GetUsersAssignedToTask(Script):
         return """Return all users assigned to a task."""
 
     def run(self, script_attributes_context: ScriptAttributesContext, *_args: Any, **kwargs: Any) -> Any:
-        default_value: list[str] = []
-
         spiff_task = script_attributes_context.task
         if not spiff_task:
-            return default_value
+            return []
 
-        human_tasks = getattr(spiff_task, "human_tasks", None)
-        if not human_tasks:
-            return default_value
+        task_guid = getattr(spiff_task, "guid", None)
+        if not task_guid:
+            return []
 
-        # Collect usernames from all potential owners on all human_task rows
-        usernames: set[str] = set()
-        for ht in human_tasks:
-            for user in getattr(ht, "potential_owners", []) or []:
-                username = getattr(user, "username", None)
-                if username:
-                    usernames.add(username)
+        query = (
+            db.session.query(UserModel.username)
+            .join(HumanTaskUserModel, HumanTaskUserModel.user_id == UserModel.id)
+            .join(HumanTaskModel, HumanTaskModel.id == HumanTaskUserModel.human_task_id)
+            .filter(HumanTaskModel.task_guid == task_guid)
+            .distinct()
+        )
 
+        usernames = [row[0] for row in query.all()]
         return sorted(usernames)
