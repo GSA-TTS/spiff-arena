@@ -19,9 +19,14 @@ class GetUsersAssignedToTask(Script):
         return """Return all users assigned to a task."""
 
     def run(self, script_attributes_context: ScriptAttributesContext, *_args: Any, **kwargs: Any) -> Any:
-        task_guid = kwargs.get("task_guid")
+        # First positional argument takes precedence
+        if _args:
+            task_guid = _args[0]
+        else:
+            task_guid = kwargs.get("task_guid")
+
         if not task_guid:
-            return []
+            raise ValueError("Expected task_guid as first argument or keyword argument")
 
         rows = (
             db.session.query(UserModel.username)  # type: ignore[no-untyped-call]

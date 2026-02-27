@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from flask.app import Flask
 
 from spiffworkflow_backend.models.db import db
@@ -67,7 +68,7 @@ class TestGetUsersAssignedToTask(BaseTest):
         assert result == ["testuser1", "testuser2", "testuser3"]
         json.dumps(result)
 
-    def test_get_users_assigned_to_task_returns_empty_if_no_task_guid(
+    def test_get_users_assigned_to_task_raises_if_no_task_guid(
         self,
         app: Flask,
         with_db_and_bpmn_file_cleanup: None,
@@ -78,6 +79,6 @@ class TestGetUsersAssignedToTask(BaseTest):
             process_instance_id=1,
             process_model_identifier="test_process_model",
         )
-        result = GetUsersAssignedToTask().run(script_attributes_context, task_guid=None)
-        assert result == []
-        json.dumps(result)
+
+        with pytest.raises(ValueError, match="Expected task_guid key argument"):
+            GetUsersAssignedToTask().run(script_attributes_context)
