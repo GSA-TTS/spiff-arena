@@ -3157,6 +3157,12 @@ paths:
           enum:
             - synchronous
             - asynchronous
+      - name: with_console
+        in: query
+        required: false
+        description: If true, capture print() output during task completion and return it in the response.
+        schema:
+          type: boolean
     get:
       tags:
         - Tasks

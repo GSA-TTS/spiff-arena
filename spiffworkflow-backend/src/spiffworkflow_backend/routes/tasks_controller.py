@@ -509,15 +509,30 @@ def task_submit(
     task_guid: str,
     body: dict[str, Any] | None = None,
     execution_mode: str | None = None,
+    with_console: bool = False,
 ) -> flask.wrappers.Response:
     with sentry_sdk.start_span(op="controller_action", name="tasks_controller.task_submit"):
         if body is None:
             body = {}
-        response_item = _task_submit_shared(process_instance_id, task_guid, body, execution_mode=execution_mode)
+
+        console_lines: list[str] = []
+        if with_console:
+            from spiffworkflow_backend.services.console_output_service import console_capture
+
+            with console_capture() as console_buf:
+                response_item = _task_submit_shared(process_instance_id, task_guid, body, execution_mode=execution_mode)
+            console_lines = console_buf.drain()
+        else:
+            response_item = _task_submit_shared(process_instance_id, task_guid, body, execution_mode=execution_mode)
+
         if "next_task_assigned_to_me" in response_item:
             response_item = response_item["next_task_assigned_to_me"]
         elif "next_task" in response_item:
             response_item = response_item["next_task"]
+
+        if console_lines:
+            response_item["console_lines"] = console_lines
+
         return make_response(jsonify(response_item), 200)
 
 
@@ -699,7 +714,17 @@ def _interstitial_stream(
         yield _render_data("unrunnable_instance", process_instance)
         return
 
-    processor = ProcessInstanceProcessor(process_instance)
+    if with_console:
+        from spiffworkflow_backend.services.console_output_service import console_capture
+
+        with console_capture() as init_buf:
+            processor = ProcessInstanceProcessor(process_instance)
+        init_console_lines = init_buf.drain()
+        if init_console_lines:
+            yield _render_data("console", {"lines": init_console_lines})
+    else:
+        processor = ProcessInstanceProcessor(process_instance)
+
     reported_ids = []  # A list of all the ids reported by this endpoint so far.
     tasks = get_reportable_tasks(processor)
     while True:
