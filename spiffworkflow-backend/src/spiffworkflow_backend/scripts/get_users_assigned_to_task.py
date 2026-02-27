@@ -28,8 +28,8 @@ class GetUsersAssignedToTask(Script):
 
         stmt = (
             select(UserModel.username)
-            .join(HumanTaskUserModel, HumanTaskUserModel.user_id == UserModel.id)
-            .join(HumanTaskModel, HumanTaskModel.id == HumanTaskUserModel.human_task_id)
+            .select_from(HumanTaskModel)
+            .join(HumanTaskModel.potential_owners)
             .where(HumanTaskModel.task_guid == task_guid)
             .distinct()
         )

@@ -25,7 +25,7 @@ class TestGetUsersAssignedToTask(BaseTest):
 
         process_model = load_test_spec(
             process_model_id="misc/testing-get-users-assigned-to-task",
-            process_model_source_directory="hello-word",
+            process_model_source_directory="hello_word",
         )
 
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=user1)
