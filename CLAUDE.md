@@ -118,3 +118,11 @@ uv sync
 **BPMN editor**: `packages/bpmn-js-spiffworkflow-react/` wraps bpmn-js with SpiffWorkflow-specific extensions, script/markdown/JSON schema editors, and diagram navigation.
 
 **State management**: TanStack React Query v5 for server state; React contexts for app state; CASL for permissions.
+
+### Key Features
+
+**Code Modules**: Process groups and models can have `.py` files that define reusable functions and constants. These are loaded by `_load_code_modules_for_process_model()` in `process_instance_processor.py`, compiled by `CodeModuleEnvironment` (in SpiffWorkflow), and their exports injected into script task globals. Group-level modules are compiled first (outermost to innermost), then model-level modules. Later modules can call functions from earlier modules — they behave as if concatenated. Functions are cleaned from task data after execution. The SpiffWorkflow integration lives in `SpiffWorkflow/spiff/script_engine/code_module_environment.py`.
+
+**Console Output Capture**: `console_output_service.py` provides a thread-safe `ConsoleOutputBuffer` and `console_capture()` context manager for capturing `print()` output during script task execution. A custom `_console_print()` function is injected into RestrictedPython builtins. The SSE interstitial stream (`_interstitial_stream`) and `task_submit` both support `with_console=True` to capture and return console output. Frontend displays output in `ConsolePanel` component.
+
+**Process Group Packages**: `process_group_package_service.py` manages per-group Python package installations via `uv pip install --target .packages/`. Packages are scoped to process groups and inherited by child models. `collect_package_dirs_for_process_model()` gathers `.packages/` dirs from all ancestor groups (outermost first) for `sys.path` injection. Package names are validated against command injection. The `.packages` entry is auto-added to `.gitignore`.
