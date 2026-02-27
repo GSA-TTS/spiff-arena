@@ -76,7 +76,6 @@ export default function ProcessGroupForm({
       display_name: processGroup.display_name,
       description: processGroup.description,
       messages: processGroup.messages,
-      allowed_imports: processGroup.allowed_imports,
     };
     if (mode === 'new') {
       if (parentGroupId) {
@@ -164,26 +163,6 @@ export default function ProcessGroupForm({
         onChange={(event: any) =>
           updateProcessGroup({ description: event.target.value })
         }
-      />,
-    );
-
-    textInputs.push(
-      <TextField
-        id="process-group-allowed-imports"
-        name="allowed_imports"
-        label={t('allowed_imports')}
-        helperText={t('allowed_imports_help')}
-        value={(processGroup.allowed_imports || []).join(', ')}
-        onChange={(event: any) => {
-          const raw = event.target.value;
-          const imports = raw
-            .split(',')
-            .map((s: string) => s.trim())
-            .filter((s: string) => s.length > 0);
-          updateProcessGroup({
-            allowed_imports: imports.length > 0 ? imports : undefined,
-          });
-        }}
       />,
     );
 
