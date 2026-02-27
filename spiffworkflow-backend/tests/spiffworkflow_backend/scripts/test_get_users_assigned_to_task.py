@@ -24,8 +24,9 @@ class TestGetUsersAssignedToTask(BaseTest):
         db.session.commit()
 
         process_model = load_test_spec(
-            process_model_id="misc/testing-get-users-assigned-to-task",
-            process_model_source_directory="hello_word",
+            "test_group/hello_world",
+            bpmn_file_name="hello_world.bpmn",
+            process_model_source_directory="hello_world",
         )
 
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=user1)
