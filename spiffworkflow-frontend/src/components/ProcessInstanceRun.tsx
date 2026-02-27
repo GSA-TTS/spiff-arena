@@ -133,6 +133,12 @@ export default function ProcessInstanceRun({
     if (processModel) {
       storeRecentProcessModelInLocalStorage(processModel);
     }
+    if (startWithConsoleRef.current) {
+      // Skip the run step — let the SSE interstitial stream handle execution
+      // so that console output from the very first tasks is captured.
+      onProcessInstanceRun(processInstance);
+      return;
+    }
     HttpService.makeCallToBackend({
       path: `/process-instance-run/${modifiedProcessModelId}/${processInstance.id}`,
       successCallback: onProcessInstanceRun,
@@ -191,8 +197,7 @@ export default function ProcessInstanceRun({
       open={menuOpen}
       anchorEl={anchorRef.current}
       transition
-      disablePortal
-      sx={{ zIndex: 1 }}
+      sx={{ zIndex: 1400 }}
     >
       {({ TransitionProps, placement }) => (
         <Grow
