@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import random
+import sys
 import re
 import time
 import uuid
@@ -76,6 +77,7 @@ from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.scripts.script import Script
 from spiffworkflow_backend.services.bpmn_process_service import BpmnProcessService
 from spiffworkflow_backend.services.file_system_service import FileSystemService
+from spiffworkflow_backend.services.process_group_package_service import ProcessGroupPackageService
 from spiffworkflow_backend.services.jinja_service import JinjaHelpers
 from spiffworkflow_backend.services.logging_service import LoggingService
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceQueueService
@@ -103,6 +105,32 @@ WorkflowCompletedHandler = Callable[[ProcessInstanceModel], None]
 def _import(name: str, glbls: dict[str, Any], *args: Any) -> None:
     if name not in glbls:
         raise ImportError(f"Import not allowed: {name}", name=name)
+
+
+def _make_import_with_package_dirs(package_dirs: list[str]) -> Callable:
+    """Create an import function that allows imports from per-group package directories.
+
+    Installed packages are importable without needing to be in allowed_imports.
+    """
+    import importlib
+
+    def _import_with_packages(name: str, glbls: dict[str, Any], *args: Any) -> None:
+        # If already in globals, allow it (standard builtins, code modules, etc.)
+        if name in glbls:
+            return
+        # Try to import from the package dirs
+        saved_path = sys.path[:]
+        try:
+            for pkg_dir in package_dirs:
+                sys.path.insert(0, pkg_dir)
+            mod = importlib.import_module(name)
+            glbls[name] = mod
+        except ImportError:
+            raise ImportError(f"Import not allowed: {name}", name=name)
+        finally:
+            sys.path[:] = saved_path
+
+    return _import_with_packages
 
 
 def _console_print(*args: Any, **kwargs: Any) -> None:
@@ -374,6 +402,7 @@ class CustomBpmnScriptEngine(PythonScriptEngine):  # type: ignore
         use_restricted_script_engine: bool = True,
         code_modules: dict[str, str] | None = None,
         additional_imports: set[str] | None = None,
+        package_dirs: list[str] | None = None,
     ) -> None:
         default_globals = {
             "_strptime": _strptime,
@@ -404,11 +433,23 @@ class CustomBpmnScriptEngine(PythonScriptEngine):  # type: ignore
         }
 
         if additional_imports:
-            for module_name in additional_imports:
-                try:
-                    default_globals[module_name] = __import__(module_name)
-                except ImportError:
-                    current_app.logger.warning(f"Could not import '{module_name}' from group allowed_imports")
+            import importlib
+
+            saved_path = sys.path[:]
+            try:
+                if package_dirs:
+                    for pkg_dir in package_dirs:
+                        sys.path.insert(0, pkg_dir)
+                for module_name in additional_imports:
+                    try:
+                        default_globals[module_name] = importlib.import_module(module_name)
+                    except ImportError:
+                        current_app.logger.warning(f"Could not import '{module_name}' from group allowed_imports")
+            finally:
+                sys.path[:] = saved_path
+
+        # Store package_dirs for dynamic import support in the restricted engine
+        self._package_dirs = package_dirs or []
 
         if os.environ.get("SPIFFWORKFLOW_BACKEND_USE_RESTRICTED_SCRIPT_ENGINE") == "false":
             use_restricted_script_engine = False
@@ -416,7 +457,10 @@ class CustomBpmnScriptEngine(PythonScriptEngine):  # type: ignore
         if use_restricted_script_engine:
             # This will overwrite the standard builtins
             default_globals.update(safe_globals)
-            default_globals["__builtins__"]["__import__"] = _import
+            if self._package_dirs:
+                default_globals["__builtins__"]["__import__"] = _make_import_with_package_dirs(self._package_dirs)
+            else:
+                default_globals["__builtins__"]["__import__"] = _import
             # Add print back (RestrictedPython removes it). Our _console_print writes
             # to the active console buffer when one exists, otherwise logs the output.
             default_globals["__builtins__"]["print"] = _console_print
@@ -554,14 +598,18 @@ class ProcessInstanceProcessor:
         tld.process_model_identifier = f"{process_instance_model.process_model_identifier}"
 
         # Load code modules (.py files) from the process model directory and ancestor groups.
-        # Collect allowed_imports from ancestor group process_group.json files.
+        # Collect allowed_imports and per-group package directories from ancestor groups.
         # If any are found and we're using the shared default engine, create a per-instance engine.
         code_modules = _load_code_modules_for_process_model(process_instance_model.process_model_identifier)
         additional_imports = _collect_allowed_imports_for_process_model(process_instance_model.process_model_identifier)
-        if (code_modules or additional_imports) and self._script_engine is self.__class__._default_script_engine:
+        package_dirs = ProcessGroupPackageService.collect_package_dirs_for_process_model(
+            process_instance_model.process_model_identifier
+        )
+        if (code_modules or additional_imports or package_dirs) and self._script_engine is self.__class__._default_script_engine:
             self._script_engine = CustomBpmnScriptEngine(
                 code_modules=code_modules or None,
                 additional_imports=additional_imports or None,
+                package_dirs=package_dirs or None,
             )
 
         self.process_instance_model = process_instance_model
