@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from collections import OrderedDict
 from collections.abc import Generator
@@ -525,10 +526,18 @@ def task_submit(
         else:
             response_item = _task_submit_shared(process_instance_id, task_guid, body, execution_mode=execution_mode)
 
+        next_task: Any = None
         if "next_task_assigned_to_me" in response_item:
-            response_item = response_item["next_task_assigned_to_me"]
+            next_task = response_item["next_task_assigned_to_me"]
         elif "next_task" in response_item:
-            response_item = response_item["next_task"]
+            next_task = response_item["next_task"]
+
+        if next_task is not None:
+            if console_lines:
+                result = dataclasses.asdict(next_task)
+                result["console_lines"] = console_lines
+                return make_response(jsonify(result), 200)
+            return make_response(jsonify(next_task), 200)
 
         if console_lines:
             response_item["console_lines"] = console_lines

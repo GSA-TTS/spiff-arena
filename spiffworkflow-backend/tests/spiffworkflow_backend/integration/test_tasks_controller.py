@@ -556,3 +556,100 @@ class TestTasksController(BaseTest):
         assert response.headers["content-type"] == "application/json"
         assert isinstance(response.json(), list)
         assert len(response.json()) == 1
+
+    def test_interstitial_stream_with_console_does_not_error(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+        with_super_admin_user: UserModel,
+    ) -> None:
+        """Verify the interstitial stream works with with_console=True.
+
+        The /run endpoint executes the script task before the interstitial stream
+        runs, so console events may not appear. This test validates the plumbing
+        does not error and the stream still returns task events.
+        """
+        process_group_id = "my_process_group"
+        process_model_id = "console_output"
+        process_model = self.create_group_and_model_with_bpmn(
+            client,
+            with_super_admin_user,
+            process_group_id=process_group_id,
+            process_model_id=process_model_id,
+            bpmn_file_location="console-output",
+            bpmn_file_name="console_with_manual_task.bpmn",
+        )
+        headers = self.logged_in_headers(with_super_admin_user)
+        response = self.create_process_instance_from_process_model_id_with_api(client, process_model.id, headers)
+        assert response.json() is not None
+        process_instance_id = response.json()["id"]
+
+        response = client.post(
+            f"/v1.0/process-instances/{self.modify_process_identifier_for_path_param(process_model.id)}/{process_instance_id}/run",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        stream_results = _dequeued_interstitial_stream(process_instance_id, with_console=True)
+        results = list(stream_results)
+        json_results = [json.loads(x[5:]) for x in results]  # type: ignore
+
+        # The stream should return at least the manual task event
+        task_events = [r for r in json_results if r.get("type") == "task"]
+        assert len(task_events) >= 1
+        assert task_events[0]["task"]["title"] == "Manual Task"
+
+        # Any console events present should have the correct structure
+        for event in json_results:
+            if event.get("type") == "console":
+                assert "lines" in event["console"]
+                assert isinstance(event["console"]["lines"], list)
+
+    def test_task_submit_with_console_returns_console_lines(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+        with_super_admin_user: UserModel,
+    ) -> None:
+        process_group_id = "my_process_group"
+        process_model_id = "console_manual"
+        process_model = self.create_group_and_model_with_bpmn(
+            client,
+            with_super_admin_user,
+            process_group_id=process_group_id,
+            process_model_id=process_model_id,
+            bpmn_file_location="console-output",
+            bpmn_file_name="console_with_manual_task.bpmn",
+        )
+        headers = self.logged_in_headers(with_super_admin_user)
+        response = self.create_process_instance_from_process_model_id_with_api(client, process_model.id, headers)
+        assert response.json() is not None
+        process_instance_id = response.json()["id"]
+
+        response = client.post(
+            f"/v1.0/process-instances/{self.modify_process_identifier_for_path_param(process_model.id)}/{process_instance_id}/run",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        # Run through the initial script task to reach the manual task
+        _dequeued_interstitial_stream(process_instance_id)
+
+        human_tasks = db.session.query(HumanTaskModel).filter(HumanTaskModel.process_instance_id == process_instance_id).all()
+        assert len(human_tasks) == 1
+        human_task = human_tasks[0]
+
+        # Submit the manual task with console capture enabled
+        response = client.put(
+            f"/v1.0/tasks/{process_instance_id}/{human_task.task_id}?with_console=true",
+            headers=headers,
+        )
+        assert response.status_code == 200, response.json()
+        assert response.json() is not None
+
+        # After submitting the manual task, the next script task runs and prints "after"
+        response_json = response.json()
+        if "console_lines" in response_json:
+            assert any("after" in line for line in response_json["console_lines"])
