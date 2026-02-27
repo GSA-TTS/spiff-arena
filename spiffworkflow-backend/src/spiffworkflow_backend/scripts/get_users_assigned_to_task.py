@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from sqlalchemy import select
+
 from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.human_task import HumanTaskModel
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
@@ -20,21 +22,17 @@ class GetUsersAssignedToTask(Script):
         return """Return all users assigned to a task."""
 
     def run(self, script_attributes_context: ScriptAttributesContext, *_args: Any, **kwargs: Any) -> Any:
-        spiff_task = script_attributes_context.task
-        if not spiff_task:
-            return []
-
-        task_guid = getattr(spiff_task, "guid", None)
+        task_guid = kwargs["task_guid"]
         if not task_guid:
             return []
 
-        query = (
-            db.session.query(UserModel.username)
+        stmt = (
+            select(UserModel.username)
             .join(HumanTaskUserModel, HumanTaskUserModel.user_id == UserModel.id)
             .join(HumanTaskModel, HumanTaskModel.id == HumanTaskUserModel.human_task_id)
-            .filter(HumanTaskModel.task_guid == task_guid)
+            .where(HumanTaskModel.task_guid == task_guid)
             .distinct()
         )
 
-        usernames = [row[0] for row in query.all()]
+        usernames = db.session.execute(stmt).scalars().all()
         return sorted(usernames)

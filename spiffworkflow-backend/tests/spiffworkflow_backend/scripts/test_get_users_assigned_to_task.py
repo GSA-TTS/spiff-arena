@@ -1,14 +1,14 @@
 import json
 
-from flask import g
 from flask.app import Flask
 
 from spiffworkflow_backend.models.db import db
-from spiffworkflow_backend.models.human_task import HumanTaskModel
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
 from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
 from spiffworkflow_backend.scripts.get_users_assigned_to_task import GetUsersAssignedToTask
+from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
+from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
 
 
 class TestGetUsersAssignedToTask(BaseTest):
@@ -17,93 +17,56 @@ class TestGetUsersAssignedToTask(BaseTest):
         app: Flask,
         with_db_and_bpmn_file_cleanup: None,
     ) -> None:
-        # Create 3 users, and set g.user (not required by script, but consistent with other tests)
-        testuser1 = self.find_or_create_user("testuser1")
-        testuser2 = self.find_or_create_user("testuser2")
-        testuser3 = self.find_or_create_user("testuser3")
-        db.session.add_all([testuser1, testuser2, testuser3])
-        db.session.commit()
-        g.user = testuser1
-
-        task_guid = "00000000-0000-0000-0000-000000000001"
-        process_instance_id = 123
-
-        # Create 2 HumanTaskModel rows
-        humantask1 = HumanTaskModel(
-            process_instance_id=process_instance_id,
-            lane_assignment_id=None,
-            completed_by_user_id=None,
-            actual_owner_id=testuser1.id,
-            form_file_name=None,
-            ui_form_file_name=None,
-            updated_at_in_seconds=0,
-            created_at_in_seconds=0,
-            task_guid=task_guid,
-            task_id=task_guid,
-            task_name="task_name_1",
-            task_title="Task Title 1",
-            task_type="User Task",
-            task_status="READY",
-            process_model_display_name="pm",
-            bpmn_process_identifier="bpmn",
-            lane_name=None,
-            json_metadata=None,
-            completed=False,
-        )
-        humantask2 = HumanTaskModel(
-            process_instance_id=process_instance_id,
-            lane_assignment_id=None,
-            completed_by_user_id=None,
-            actual_owner_id=testuser1.id,
-            form_file_name=None,
-            ui_form_file_name=None,
-            updated_at_in_seconds=0,
-            created_at_in_seconds=0,
-            task_guid=task_guid,
-            task_id=task_guid,
-            task_name="task_name_2",
-            task_title="Task Title 2",
-            task_type="User Task",
-            task_status="READY",
-            process_model_display_name="pm",
-            bpmn_process_identifier="bpmn",
-            lane_name=None,
-            json_metadata=None,
-            completed=False,
-        )
-        db.session.add_all([humantask1, humantask2])
+        user1 = self.find_or_create_user("testuser1")
+        user2 = self.find_or_create_user("testuser2")
+        user3 = self.find_or_create_user("testuser3")
+        db.session.add_all([user1, user2, user3])
         db.session.commit()
 
-        # Assign users via human_task_user rows
+        process_model = load_test_spec(
+            process_model_id="misc/testing-get-users-assigned-to-task",
+            process_model_source_directory="hello-word",
+        )
+
+        process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=user1)
+        processor = ProcessInstanceProcessor(process_instance)
+        processor.do_engine_steps(save=True)
+
+        assert len(process_instance.active_human_tasks) == 1
+        human_task = process_instance.active_human_tasks[0]
+
+        # The initiator, user1, is by default assigned as a potential owner for the task
+        assert len(human_task.potential_owners) == 1
+        assert human_task.potential_owners[0] == user1
+
+        # Assign two more potential owners for the same human task
         db.session.add_all(
             [
-                # humantask1: user1 + user2
-                HumanTaskUserModel(human_task_id=humantask1.id, user_id=testuser1.id, added_by="manual"),
-                HumanTaskUserModel(human_task_id=humantask1.id, user_id=testuser2.id, added_by="manual"),
-                # humantask2: user2 + user3 (user2 duplicated across tasks; script should dedupe)
-                HumanTaskUserModel(human_task_id=humantask2.id, user_id=testuser2.id, added_by="manual"),
-                HumanTaskUserModel(human_task_id=humantask2.id, user_id=testuser3.id, added_by="manual"),
+                HumanTaskUserModel(human_task_id=human_task.id, user_id=user2.id, added_by="manual"),
+                HumanTaskUserModel(human_task_id=human_task.id, user_id=user3.id, added_by="manual"),
             ]
         )
         db.session.commit()
 
-        class FakeSpiffTask:
-            def __init__(self, guid: str):
-                self.guid = guid
+        # Refresh relationship so potential_owners reflects the new join rows
+        db.session.refresh(human_task)
+
+        task_guid = human_task.task_guid
+        assert task_guid is not None
 
         script_attributes_context = ScriptAttributesContext(
-            task=FakeSpiffTask(task_guid),
+            task=None,
             environment_identifier="testing",
-            process_instance_id=process_instance_id,
-            process_model_identifier="test_process_model",
+            process_instance_id=process_instance.id,
+            process_model_identifier=process_model.id,
         )
 
-        result = GetUsersAssignedToTask().run(script_attributes_context)
+        result = GetUsersAssignedToTask().run(script_attributes_context, task_guid=task_guid)
 
         assert result == ["testuser1", "testuser2", "testuser3"]
         json.dumps(result)
 
-    def test_get_users_assigned_to_task_returns_empty_if_no_task(
+    def test_get_users_assigned_to_task_returns_empty_if_no_task_guid(
         self,
         app: Flask,
         with_db_and_bpmn_file_cleanup: None,
@@ -114,6 +77,6 @@ class TestGetUsersAssignedToTask(BaseTest):
             process_instance_id=1,
             process_model_identifier="test_process_model",
         )
-        result = GetUsersAssignedToTask().run(script_attributes_context)
+        result = GetUsersAssignedToTask().run(script_attributes_context, task_guid=None)
         assert result == []
         json.dumps(result)
