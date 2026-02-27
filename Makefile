@@ -58,8 +58,16 @@ build-images:
 		--build-arg GROUP_NAME=$(GROUP_NAME) \
 		$(JUST)
 
-dev-env: stop-dev build-images uv-sync cp-poetry-i be-uv-sync be-db-clean fe-npm-i
+dev-env: stop-dev build-images uv-sync be-uv-sync be-db-clean fe-npm-i
 	@true
+
+# Local dev with the GSA-TTS connector built from ../spiffworkflow-connector
+dev-env-local:
+	$(MAKE) CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml dev-env
+
+# One-shot: setup + start with local connector
+local: dev-env-local
+	$(MAKE) CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml start-dev
 
 start-dev: stop-dev
 	$(DOCKER_COMPOSE) up -d
@@ -114,12 +122,6 @@ co-wheel:
 
 cp-sh:
 	$(IN_CONNECTOR_PROXY) /bin/bash
-
-cp-poetry-i:
-	$(IN_CONNECTOR_PROXY) poetry install
-
-cp-poetry-lock:
-	$(IN_CONNECTOR_PROXY) poetry lock --no-update
 
 cp-logs:
 	docker logs -f $(CONNECTOR_PROXY_CONTAINER)
@@ -182,12 +184,12 @@ sh:
 take-ownership:
 	$(SUDO) chown -R $(ME) .
 
-.PHONY: build-images dev-env \
+.PHONY: build-images dev-env dev-env-local local \
 	start-dev stop-dev \
 	be-clear-log-file be-logs be-mypy be-uv-sync be-venv-rm \
 	be-db-clean be-db-migrate be-sh be-sqlite be-tests be-tests-par \
 	co-tests co-wheel \
-	cp-logs cp-poetry-i cp-poetry-lock cp-sh \
+	cp-logs cp-sh \
 	cpagg-logs cpagg-sh \
 	cpah-logs cpah-sh \
 	fe-lint-fix fe-logs fe-npm-clean fe-npm-i fe-npm-rm fe-sh fe-unimported  \

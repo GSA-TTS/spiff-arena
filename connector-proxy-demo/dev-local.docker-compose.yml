@@ -1,0 +1,16 @@
+
+services:
+  spiffworkflow-connector:
+    build:
+      context: ${CONNECTOR_REPO_PATH:-../spiffworkflow-connector}
+      dockerfile: dev.Dockerfile
+    user: "${RUN_AS}"
+    command: ["uv", "run", "granian", "--reload", "--host", "0.0.0.0", "--port", "${CONNECTOR_PROXY_PORT:-8004}", "--interface", "asgi", "main:app"]
+    environment:
+      HOME: "/app"
+      DEPLOYMENT: "local"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ${CONNECTOR_REPO_PATH:-../spiffworkflow-connector}:/app
