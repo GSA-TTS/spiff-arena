@@ -702,7 +702,7 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
                 cmdStack.execute('element.updateModdleProperties', {
                   element,
                   moddleElement: element.businessObject,
-                  properties: { script: `${element.id}_script()` },
+                  properties: { script: `${element.id}_script(locals())` },
                 });
               }
             } else if (!cachedType) {
@@ -727,12 +727,12 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
 
               if (!hasPreScript) {
                 const preScript = moddle.create('spiffworkflow:PreScript');
-                preScript.value = `${element.id}_pre()`;
+                preScript.value = `${element.id}_pre(locals())`;
                 extensionElements.get('values').push(preScript);
               }
               if (!hasPostScript) {
                 const postScript = moddle.create('spiffworkflow:PostScript');
-                postScript.value = `${element.id}_post()`;
+                postScript.value = `${element.id}_post(locals())`;
                 extensionElements.get('values').push(postScript);
               }
 
@@ -749,7 +749,7 @@ const BpmnEditor = forwardRef<BpmnEditorRef, BpmnEditorInternalProps>(
                 cmdStack.execute('element.updateModdleProperties', {
                   element,
                   moddleElement: businessObject,
-                  properties: { script: `${element.id}_script()` },
+                  properties: { script: `${element.id}_script(locals())` },
                 });
               }
 

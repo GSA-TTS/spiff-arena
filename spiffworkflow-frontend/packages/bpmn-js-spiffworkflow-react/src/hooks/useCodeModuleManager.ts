@@ -41,8 +41,8 @@ const TASK_TYPES_WITH_SCRIPTS = new Set([
   'bpmn:SubProcess',
 ]);
 
-// Matches managed function definitions like: def Activity_0qpzdpu_pre(
-const MANAGED_FUNC_PATTERN = /^def (\w+)_(pre|post|script)\(\s*\):\s*$/;
+// Matches managed function definitions like: def Activity_0qpzdpu_pre(task_data):
+const MANAGED_FUNC_PATTERN = /^def (\w+)_(pre|post|script)\(\s*task_data\s*\):\s*$/;
 
 function isTaskType(elementType: string): boolean {
   return TASK_TYPES_WITH_SCRIPTS.has(elementType);
@@ -67,7 +67,7 @@ function createFunctionStub(
 }
 
 function renderFunction(fn: CodeModuleFunction): string {
-  return `def ${fn.name}():\n    ${fn.docstring}\n${fn.body}`;
+  return `def ${fn.name}(task_data):\n    ${fn.docstring}\n${fn.body}`;
 }
 
 function renderContent(
