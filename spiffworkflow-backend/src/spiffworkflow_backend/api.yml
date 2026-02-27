@@ -622,6 +622,79 @@ paths:
               schema:
                 $ref: "#/components/schemas/OkTrue"
 
+  /process-groups/{modified_process_group_id}/packages:
+    parameters:
+      - name: modified_process_group_id
+        in: path
+        required: true
+        description: The unique id of an existing process group
+        schema:
+          type: string
+    get:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_package_list
+      summary: List installed Python packages for a process group
+      tags:
+        - Process Group Packages
+      responses:
+        "200":
+          description: An array of installed packages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+    post:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_package_install
+      summary: Install a Python package into a process group
+      tags:
+        - Process Group Packages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - package_name
+              properties:
+                package_name:
+                  type: string
+      responses:
+        "200":
+          description: The installed package info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+
+  /process-groups/{modified_process_group_id}/packages/{package_name}:
+    parameters:
+      - name: modified_process_group_id
+        in: path
+        required: true
+        description: The unique id of an existing process group
+        schema:
+          type: string
+      - name: package_name
+        in: path
+        required: true
+        description: The name of the package to uninstall
+        schema:
+          type: string
+    delete:
+      operationId: spiffworkflow_backend.routes.process_groups_controller.process_group_package_uninstall
+      summary: Uninstall a Python package from a process group
+      tags:
+        - Process Group Packages
+      responses:
+        "200":
+          description: The package was uninstalled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkTrue"
+
   /upsearch-locations:
     parameters:
       - name: location

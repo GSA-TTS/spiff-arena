@@ -21,6 +21,7 @@ from spiffworkflow_backend.routes.process_api_blueprint import _un_modify_modifi
 from spiffworkflow_backend.services.authorization_service import AuthorizationService
 from spiffworkflow_backend.services.file_system_service import FileSystemService
 from spiffworkflow_backend.services.message_definition_service import MessageDefinitionService
+from spiffworkflow_backend.services.process_group_package_service import ProcessGroupPackageService
 from spiffworkflow_backend.services.process_model_service import ProcessModelService
 from spiffworkflow_backend.services.process_model_service import ProcessModelWithInstancesNotDeletableError
 from spiffworkflow_backend.services.spec_file_service import SpecFileService
@@ -251,4 +252,32 @@ def process_group_file_delete(modified_process_group_id: str, file_name: str) ->
         )
     os.remove(file_path)
     _commit_and_push_to_git(f"User: {g.user.username} deleted group script {file_name} from {process_group_id}")
+    return make_response(jsonify({"ok": True}), 200)
+
+
+def process_group_package_list(modified_process_group_id: str) -> flask.wrappers.Response:
+    """List installed packages for a process group."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    packages = ProcessGroupPackageService.list_packages(process_group_id)
+    return make_response(jsonify(packages), 200)
+
+
+def process_group_package_install(modified_process_group_id: str, body: dict) -> flask.wrappers.Response:
+    """Install a Python package into a process group's isolated directory."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    package_name = body.get("package_name", "").strip()
+    if not package_name:
+        raise ApiError(
+            error_code="missing_package_name",
+            message="package_name is required",
+            status_code=400,
+        )
+    result = ProcessGroupPackageService.install_package(process_group_id, package_name)
+    return make_response(jsonify(result), 200)
+
+
+def process_group_package_uninstall(modified_process_group_id: str, package_name: str) -> flask.wrappers.Response:
+    """Uninstall a Python package from a process group's isolated directory."""
+    process_group_id = _un_modify_modified_process_model_id(modified_process_group_id)
+    ProcessGroupPackageService.uninstall_package(process_group_id, package_name)
     return make_response(jsonify({"ok": True}), 200)
