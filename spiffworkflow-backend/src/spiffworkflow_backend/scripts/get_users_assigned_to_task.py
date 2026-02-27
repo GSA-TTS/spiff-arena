@@ -19,7 +19,6 @@ class GetUsersAssignedToTask(Script):
         return """Return all users assigned to a task."""
 
     def run(self, script_attributes_context: ScriptAttributesContext, *_args: Any, **kwargs: Any) -> Any:
-        # First positional argument takes precedence
         if _args:
             task_guid = _args[0]
         else:
