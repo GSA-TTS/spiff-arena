@@ -2,14 +2,13 @@
 
 from typing import Any
 
-from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
-from spiffworkflow_backend.scripts.script import Script
-
 from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.human_task import HumanTaskModel
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
+from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
 from spiffworkflow_backend.models.user import UserModel
-from spiffworkflow_backend.models.task import TaskModel
+from spiffworkflow_backend.scripts.script import Script
+
 
 class GetUsersAssignedToTask(Script):
     @staticmethod

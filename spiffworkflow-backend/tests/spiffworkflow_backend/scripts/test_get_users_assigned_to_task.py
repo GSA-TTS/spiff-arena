@@ -7,7 +7,6 @@ from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.human_task import HumanTaskModel
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
 from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
-from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.scripts.get_users_assigned_to_task import GetUsersAssignedToTask
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
 
@@ -18,7 +17,7 @@ class TestGetUsersAssignedToTask(BaseTest):
         app: Flask,
         with_db_and_bpmn_file_cleanup: None,
     ) -> None:
-        # Create 3 users, and set g.user
+        # Create 3 users, and set g.user (not required by script, but consistent with other tests)
         testuser1 = self.find_or_create_user("testuser1")
         testuser2 = self.find_or_create_user("testuser2")
         testuser3 = self.find_or_create_user("testuser3")
@@ -26,25 +25,10 @@ class TestGetUsersAssignedToTask(BaseTest):
         db.session.commit()
         g.user = testuser1
 
-        # Create a TaskModel + 2 HumanTaskModel rows tied to it
         task_guid = "00000000-0000-0000-0000-000000000001"
         process_instance_id = 123
-        bpmn_process_id = 1
-        task_definition_id = 1
 
-        task_model = TaskModel(
-            guid=task_guid,
-            bpmn_process_id=bpmn_process_id,
-            process_instance_id=process_instance_id,
-            task_definition_id=task_definition_id,
-            state="READY",
-            properties_json={"last_state_change": 0, "state": 0, "task_spec": "UserTask1", "workflow_name": "wf"},
-            json_data_hash="json_hash",
-            python_env_data_hash="py_hash",
-        )
-        db.session.add(task_model)
-        db.session.commit()
-
+        # Create 2 HumanTaskModel rows
         humantask1 = HumanTaskModel(
             process_instance_id=process_instance_id,
             lane_assignment_id=None,
@@ -90,24 +74,25 @@ class TestGetUsersAssignedToTask(BaseTest):
         db.session.add_all([humantask1, humantask2])
         db.session.commit()
 
-        # Assign users
+        # Assign users via human_task_user rows
         db.session.add_all(
             [
+                # humantask1: user1 + user2
                 HumanTaskUserModel(human_task_id=humantask1.id, user_id=testuser1.id, added_by="manual"),
                 HumanTaskUserModel(human_task_id=humantask1.id, user_id=testuser2.id, added_by="manual"),
-            ]
-        )
-        # humantask2: user2 + user3 (user2 duplicates across humantask1/humantask2; script should dedupe)
-        db.session.add_all(
-            [
+                # humantask2: user2 + user3 (user2 duplicated across tasks; script should dedupe)
                 HumanTaskUserModel(human_task_id=humantask2.id, user_id=testuser2.id, added_by="manual"),
                 HumanTaskUserModel(human_task_id=humantask2.id, user_id=testuser3.id, added_by="manual"),
             ]
         )
         db.session.commit()
 
+        class FakeSpiffTask:
+            def __init__(self, guid: str):
+                self.guid = guid
+
         script_attributes_context = ScriptAttributesContext(
-            task=task_model,
+            task=FakeSpiffTask(task_guid),
             environment_identifier="testing",
             process_instance_id=process_instance_id,
             process_model_identifier="test_process_model",
@@ -115,7 +100,6 @@ class TestGetUsersAssignedToTask(BaseTest):
 
         result = GetUsersAssignedToTask().run(script_attributes_context)
 
-        # Should return all assigned usernames, deduped, sorted
         assert result == ["testuser1", "testuser2", "testuser3"]
         json.dumps(result)
 
