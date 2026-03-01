@@ -13,6 +13,7 @@
       <bpmn:extensionElements>
         <spiffworkflow:preScript>Activity_0qpzdpu_pre(locals())</spiffworkflow:preScript>
         <spiffworkflow:postScript>Activity_0qpzdpu_post(locals())</spiffworkflow:postScript>
+        <spiffworkflow:formLoadScript>Activity_0qpzdpu_form_load(locals())</spiffworkflow:formLoadScript>
         <spiffworkflow:instructionsForEndUser>This is an example **Manual Task**. A **Manual Task** is designed to allow someone to complete a task outside of the system and then report back that it is complete. You can click the *Continue* button to proceed. When you are done running this process, you can edit the **Process Model** to include a:
 
  * **Script Task** - write a short snippet of python code to update some data
