@@ -62,3 +62,9 @@ For reference, this is an example of the resulting BPMN XML for both static and 
 
 When the process instance executes, it will store each of the task metadata values in the system's database, associated with the appropriate human task.
 When lists of human tasks are fetched via the API, the metadata keys and values will be returned.
+
+## Model-Level Task Metadata Extraction
+
+If you need the same metadata extracted for every human task in a process model (rather than configuring each task individually), you can use **task metadata extraction paths** on the process model. These use dot-notation paths to extract values from task data into each human task's metadata automatically.
+
+See [Use Custom Process Metadata](use_custom_process_metadata.md#task-level-metadata-extraction) for details. If both model-level extraction paths and per-task `taskMetadataValues` are configured, the per-task values take precedence for the same key.

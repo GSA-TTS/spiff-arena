@@ -138,6 +138,7 @@ def process_model_update(
         "primary_process_id",
         "description",
         "metadata_extraction_paths",
+        "task_metadata_extraction_paths",
         "fault_or_suspend_on_exception",
         "exception_notification_addresses",
     ]

@@ -2147,6 +2147,12 @@ paths:
         description: The page number to return. Defaults to page 1.
         schema:
           type: integer
+      - name: json_metadata_filter
+        in: query
+        required: false
+        description: Filter tasks by json_metadata values. Format is key:value pairs separated by commas.
+        schema:
+          type: string
     get:
       tags:
         - Tasks
@@ -2184,6 +2190,12 @@ paths:
         description: The page number to return. Defaults to page 1.
         schema:
           type: integer
+      - name: json_metadata_filter
+        in: query
+        required: false
+        description: Filter tasks by json_metadata values. Format is key:value pairs separated by commas.
+        schema:
+          type: string
     get:
       tags:
         - Process Instances
@@ -2247,6 +2259,12 @@ paths:
         description: The page number to return. Defaults to page 1.
         schema:
           type: integer
+      - name: json_metadata_filter
+        in: query
+        required: false
+        description: Filter tasks by json_metadata values. Format is key:value pairs separated by commas.
+        schema:
+          type: string
     get:
       tags:
         - Process Instances
@@ -2282,6 +2300,12 @@ paths:
         description: The page number to return. Defaults to page 1.
         schema:
           type: integer
+      - name: json_metadata_filter
+        in: query
+        required: false
+        description: Filter tasks by json_metadata values. Format is key:value pairs separated by commas.
+        schema:
+          type: string
     get:
       tags:
         - Process Instances
@@ -4289,6 +4313,16 @@ components:
         primary_process_id:
           type: string
           nullable: true
+        task_metadata_extraction_paths:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              path:
+                type: string
     ProcessModelCopyRequest:
       type: object
       required:

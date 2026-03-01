@@ -76,6 +76,22 @@ from spiffworkflow_backend.services.process_instance_tmp_service import ProcessI
 from spiffworkflow_backend.services.task_service import TaskService
 
 
+def _apply_json_metadata_filter(query: Any) -> Any:
+    json_metadata_filter = request.args.get("json_metadata_filter", None)
+    if json_metadata_filter:
+        json_metadata_column = HumanTaskModel.__table__.columns["json_metadata"]
+        for filter_pair in json_metadata_filter.split(","):
+            if ":" in filter_pair:
+                filter_key, filter_value = filter_pair.split(":", 1)
+                if current_app.config["SPIFFWORKFLOW_BACKEND_DATABASE_TYPE"] == "postgres":
+                    query = query.filter(json_metadata_column[filter_key].astext == filter_value)
+                else:
+                    query = query.filter(
+                        func.json_extract(json_metadata_column, f"$.{filter_key}") == filter_value
+                    )
+    return query
+
+
 def task_allows_guest(
     process_instance_id: int,
     task_guid: str,
@@ -119,6 +135,8 @@ def task_list_my_tasks(process_instance_id: int | None = None, page: int = 1, pe
         )
 
     potential_owner_usernames_from_group_concat_or_similar = _get_potential_owner_usernames(assigned_user)
+
+    human_task_query = _apply_json_metadata_filter(human_task_query)
 
     # FIXME: this breaks postgres. Look at commit c147cdb47b1481f094b8c3d82dc502fe961f4977 for
     # UPDATE: maybe fixed in postgres and mysql. remove comment if so.
@@ -1010,6 +1028,8 @@ def _get_tasks(
             human_tasks_query = human_tasks_query.filter(HumanTaskModel.lane_assignment_id.is_(None))  # type: ignore
 
     potential_owner_usernames_from_group_concat_or_similar = _get_potential_owner_usernames(assigned_user)
+
+    human_tasks_query = _apply_json_metadata_filter(human_tasks_query)
 
     process_model_identifier_column = ProcessInstanceModel.process_model_identifier
     process_instance_status_column = ProcessInstanceModel.status.label("process_instance_status")  # type: ignore

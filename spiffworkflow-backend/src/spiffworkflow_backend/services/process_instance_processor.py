@@ -63,6 +63,7 @@ from spiffworkflow_backend.models.human_task import HumanTaskModel
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserAddedBy
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
 from spiffworkflow_backend.models.json_data import JsonDataModel
+from spiffworkflow_backend.models.process_model import ProcessModelInfo
 from spiffworkflow_backend.models.process_instance import ProcessInstanceCannotBeRunError
 from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.process_instance import ProcessInstanceStatus
@@ -937,6 +938,11 @@ class ProcessInstanceProcessor:
         self.store_metadata(metadata)
         self.update_summary()
 
+        process_model_info = ProcessModelService.get_process_model(
+            self.process_instance_model.process_model_identifier
+        )
+        task_metadata_extraction_paths = process_model_info.task_metadata_extraction_paths
+
         for ready_or_waiting_task in ready_or_waiting_tasks:
             # filter out non-usertasks
             task_spec = ready_or_waiting_task.task_spec
@@ -951,6 +957,12 @@ class ProcessInstanceProcessor:
                 form_file_name = None
                 ui_form_file_name = None
                 json_metadata = {}
+                if task_metadata_extraction_paths:
+                    model_level_metadata = ProcessModelInfo.extract_metadata(
+                        ready_or_waiting_task.data,
+                        task_metadata_extraction_paths,
+                    )
+                    json_metadata.update({k: v for k, v in model_level_metadata.items() if v is not None})
                 if "taskMetadataValues" in extensions:
                     task_metadata_values = extensions["taskMetadataValues"]
                     # Process each taskMetadataValue using the script engine

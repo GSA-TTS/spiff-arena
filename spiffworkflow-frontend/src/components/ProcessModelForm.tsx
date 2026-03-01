@@ -78,6 +78,7 @@ export default function ProcessModelForm({
       display_name: processModel.display_name,
       description: processModel.description,
       metadata_extraction_paths: processModel.metadata_extraction_paths,
+      task_metadata_extraction_paths: processModel.task_metadata_extraction_paths,
       fault_or_suspend_on_exception: processModel.fault_or_suspend_on_exception,
       exception_notification_addresses:
         processModel.exception_notification_addresses,
@@ -177,6 +178,81 @@ export default function ProcessModelForm({
       processModel.metadata_extraction_paths || [];
     cep.push({ key: '', path: '' });
     updateProcessModel({ metadata_extraction_paths: cep });
+  };
+
+  const taskMetadataExtractionPathForm = (
+    index: number,
+    metadataExtractionPath: MetadataExtractionPath,
+  ) => {
+    return (
+      <Grid container spacing={2} alignItems="center" sx={{ mb: 1 }}>
+        <Grid size={{ xs: 3 }}>
+          <TextField
+            id={`process-model-task-metadata-extraction-path-key-${index}`}
+            label={t('extraction_key')}
+            value={metadataExtractionPath.key}
+            onChange={(event: any) => {
+              const cep: MetadataExtractionPath[] =
+                processModel.task_metadata_extraction_paths || [];
+              const newMeta = { ...metadataExtractionPath };
+              newMeta.key = event.target.value;
+              cep[index] = newMeta;
+              updateProcessModel({ task_metadata_extraction_paths: cep });
+            }}
+            fullWidth
+          />
+        </Grid>
+        <Grid size={{ xs: 6 }}>
+          <TextField
+            id={`process-model-task-metadata-extraction-path-${index}`}
+            label={t('extraction_path')}
+            value={metadataExtractionPath.path}
+            onChange={(event: any) => {
+              const cep: MetadataExtractionPath[] =
+                processModel.task_metadata_extraction_paths || [];
+              const newMeta = { ...metadataExtractionPath };
+              newMeta.path = event.target.value;
+              cep[index] = newMeta;
+              updateProcessModel({ task_metadata_extraction_paths: cep });
+            }}
+            fullWidth
+          />
+        </Grid>
+        <Grid size={{ xs: 1 }}>
+          <SpiffTooltip title={t('remove_key')}>
+            <IconButton
+              aria-label={t('remove_key')}
+              onClick={() => {
+                const cep: MetadataExtractionPath[] =
+                  processModel.task_metadata_extraction_paths || [];
+                cep.splice(index, 1);
+                updateProcessModel({ task_metadata_extraction_paths: cep });
+              }}
+            >
+              <TrashCan />
+            </IconButton>
+          </SpiffTooltip>
+        </Grid>
+      </Grid>
+    );
+  };
+
+  const taskMetadataExtractionPathFormArea = () => {
+    if (processModel.task_metadata_extraction_paths) {
+      return processModel.task_metadata_extraction_paths.map(
+        (metadataExtractionPath: MetadataExtractionPath, index: number) => {
+          return taskMetadataExtractionPathForm(index, metadataExtractionPath);
+        },
+      );
+    }
+    return null;
+  };
+
+  const addBlankTaskMetadataExtractionPath = () => {
+    const cep: MetadataExtractionPath[] =
+      processModel.task_metadata_extraction_paths || [];
+    cep.push({ key: '', path: '' });
+    updateProcessModel({ task_metadata_extraction_paths: cep });
   };
 
   const notificationAddressForm = (
@@ -388,6 +464,32 @@ export default function ProcessModelForm({
         sx={{ mt: 1, mb: 2 }}
       >
         {t('add_metadata_extraction_path')}
+      </Button>,
+    );
+
+    textInputs.push(
+      <Typography variant="h3" sx={{ mt: 2, mb: 1 }}>
+        {t('task_metadata_extractions')}
+      </Typography>,
+    );
+    textInputs.push(
+      <Typography variant="body2" sx={{ mb: 2 }}>
+        {t('task_metadata_extractions_help')}
+      </Typography>,
+    );
+    textInputs.push(<>{taskMetadataExtractionPathFormArea()}</>);
+    textInputs.push(
+      <Button
+        data-testid="add-task-metadata-extraction-path-button"
+        startIcon={<AddAlt />}
+        variant="outlined"
+        size="small"
+        onClick={() => {
+          addBlankTaskMetadataExtractionPath();
+        }}
+        sx={{ mt: 1, mb: 2 }}
+      >
+        {t('add_task_metadata_extraction_path')}
       </Button>,
     );
 
