@@ -32,6 +32,7 @@ from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
 from spiffworkflow_backend.models.task import TaskNotFoundError
 from spiffworkflow_backend.models.task_definition import TaskDefinitionModel
 from spiffworkflow_backend.models.task_draft_data import TaskDraftDataModel
+from spiffworkflow_backend.models.task_navigation_snapshot import TaskNavigationSnapshotModel
 from spiffworkflow_backend.services.process_instance_tmp_service import ProcessInstanceTmpService
 
 
@@ -804,6 +805,125 @@ class TaskService:
             task_definition_id=task_definition.id,
         )
         return task_model
+
+    @classmethod
+    def snapshot_human_task_data_for_navigation(
+        cls,
+        process_instance_id: int,
+        from_task_guid: str,
+    ) -> None:
+        """Snapshot completed human task data from the given task guid onward.
+
+        This preserves the data so it can be restored as pre-fill when navigating forward.
+        Only snapshots tasks that don't already have a snapshot.
+        """
+        human_tasks = (
+            HumanTaskModel.query.filter_by(process_instance_id=process_instance_id, completed=True)
+            .order_by(HumanTaskModel.id.asc())  # type: ignore
+            .all()
+        )
+
+        # Find the index of the from_task_guid
+        start_index = None
+        for i, ht in enumerate(human_tasks):
+            if ht.task_id == from_task_guid:
+                start_index = i
+                break
+
+        if start_index is None:
+            return
+
+        tasks_to_snapshot = human_tasks[start_index:]
+        for seq, ht in enumerate(tasks_to_snapshot):
+            # Check if snapshot already exists for this task
+            existing = TaskNavigationSnapshotModel.query.filter_by(
+                process_instance_id=process_instance_id,
+                task_guid=ht.task_id,
+            ).first()
+            if existing:
+                continue
+
+            task_model = TaskModel.query.filter_by(guid=ht.task_id).first()
+            if task_model is None:
+                continue
+
+            full_bpmn_process_id_path = cls.full_bpmn_process_path(task_model.bpmn_process, "id")
+            task_definition_id_path = f"{':'.join(map(str, full_bpmn_process_id_path))}:{task_model.task_definition_id}"
+
+            snapshot = TaskNavigationSnapshotModel(
+                process_instance_id=process_instance_id,
+                task_definition_id_path=task_definition_id_path,
+                json_data_hash=task_model.json_data_hash,
+                navigation_sequence=start_index + seq,
+                task_guid=ht.task_id,
+                bpmn_identifier=ht.task_title or ht.task_name,
+            )
+            db.session.add(snapshot)
+
+        db.session.flush()
+
+    @classmethod
+    def get_navigation_snapshot_for_task(
+        cls,
+        process_instance_id: int,
+        task_guid: str,
+    ) -> TaskNavigationSnapshotModel | None:
+        """Get the navigation snapshot for a specific task."""
+        snapshot: TaskNavigationSnapshotModel | None = TaskNavigationSnapshotModel.query.filter_by(
+            process_instance_id=process_instance_id,
+            task_guid=task_guid,
+        ).first()
+        return snapshot
+
+    @classmethod
+    def load_snapshot_into_draft_data(
+        cls,
+        process_instance_id: int,
+        task_model: TaskModel,
+    ) -> bool:
+        """If a snapshot exists for this task definition, load it into draft data for form pre-fill.
+
+        Returns True if snapshot data was loaded.
+        """
+        full_bpmn_process_id_path = cls.full_bpmn_process_path(task_model.bpmn_process, "id")
+        task_definition_id_path = f"{':'.join(map(str, full_bpmn_process_id_path))}:{task_model.task_definition_id}"
+
+        snapshot = TaskNavigationSnapshotModel.query.filter_by(
+            process_instance_id=process_instance_id,
+            task_definition_id_path=task_definition_id_path,
+        ).first()
+
+        if snapshot is None:
+            return False
+
+        from spiffworkflow_backend.models.task_draft_data import TaskDraftDataDict
+
+        task_draft_data_dict: TaskDraftDataDict = {
+            "process_instance_id": process_instance_id,
+            "task_definition_id_path": task_definition_id_path,
+            "saved_form_data_hash": snapshot.json_data_hash,
+        }
+        TaskDraftDataModel.insert_or_update_task_draft_data_dict(task_draft_data_dict)
+        db.session.flush()
+        return True
+
+    @classmethod
+    def clear_navigation_snapshots(cls, process_instance_id: int) -> None:
+        """Clear all navigation snapshots for a process instance."""
+        TaskNavigationSnapshotModel.query.filter_by(process_instance_id=process_instance_id).delete()
+        db.session.flush()
+
+    @classmethod
+    def has_navigation_snapshots_after_task(
+        cls,
+        process_instance_id: int,
+        task_definition_id_path: str,
+    ) -> bool:
+        """Check if there are any navigation snapshots for tasks after the current task's definition."""
+        snapshot = TaskNavigationSnapshotModel.query.filter_by(
+            process_instance_id=process_instance_id,
+        ).first()
+        return snapshot is not None
 
     @classmethod
     def _get_python_env_data_dict_from_spiff_task(cls, spiff_task: SpiffTask, serializer: BpmnWorkflowSerializer) -> dict:

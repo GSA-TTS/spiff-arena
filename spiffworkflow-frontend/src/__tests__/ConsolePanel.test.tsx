@@ -23,9 +23,7 @@ describe('ConsolePanel', () => {
   });
 
   it('renders lines', () => {
-    render(
-      <ConsolePanel lines={['hello', 'world']} onClear={() => {}} />,
-    );
+    render(<ConsolePanel lines={['hello', 'world']} onClear={() => {}} />);
     expect(screen.getByText('hello')).toBeInTheDocument();
     expect(screen.getByText('world')).toBeInTheDocument();
   });

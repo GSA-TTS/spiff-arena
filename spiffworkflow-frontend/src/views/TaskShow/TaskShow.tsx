@@ -13,6 +13,7 @@ import {
 import { useDebouncedCallback } from 'use-debounce';
 import HttpService from '../../services/HttpService';
 import useAPIError from '../../hooks/UseApiError';
+import useTaskNavigation from '../../hooks/useTaskNavigation';
 import {
   doNothing,
   modifyProcessIdentifierForPathParam,
@@ -50,6 +51,17 @@ export default function TaskShow() {
   const { addError, removeError } = useAPIError();
 
   const { t } = useTranslation();
+
+  const {
+    canGoBack,
+    canGoForward,
+    goBack,
+    goForward,
+    loading: navLoading,
+  } = useTaskNavigation(
+    params.process_instance_id ? Number(params.process_instance_id) : undefined,
+    params.task_guid,
+  );
 
   const addErrorCallback = useCallback((error: ErrorForDisplay) => {
     addError(error);
@@ -274,6 +286,38 @@ export default function TaskShow() {
     sendAutosaveEvent({ successCallback });
   };
 
+  const handleGoBack = async () => {
+    if (formButtonsDisabled || navLoading) {
+      return;
+    }
+    setFormButtonsDisabled(true);
+    const newTaskGuid = await goBack();
+    if (newTaskGuid && params.process_instance_id) {
+      navigate(`/tasks/${params.process_instance_id}/${newTaskGuid}`);
+    } else {
+      setFormButtonsDisabled(false);
+    }
+  };
+
+  const handleGoForward = async () => {
+    if (formButtonsDisabled || navLoading || !taskData) {
+      return;
+    }
+    setFormButtonsDisabled(true);
+    removeError();
+    const dataToSubmit = recursivelyChangeNullAndUndefined(
+      { ...taskData },
+      null,
+    );
+    delete dataToSubmit.isManualTask;
+    const result = await goForward(dataToSubmit);
+    if (result && result.process_instance_id && result.id) {
+      navigate(`/tasks/${result.process_instance_id}/${result.id}`);
+    } else {
+      setFormButtonsDisabled(false);
+    }
+  };
+
   const getSubmitButtonOptions = (formUiSchema: any) => {
     const uiOptionsString = 'ui:options';
     let submitButtonOptions = {};
@@ -361,6 +405,16 @@ export default function TaskShow() {
       }
       reactFragmentToHideSubmitButton = (
         <Stack direction="row" spacing={2}>
+          {canGoBack && (
+            <Button
+              id="back-button"
+              onClick={handleGoBack}
+              disabled={formButtonsDisabled || navLoading}
+              variant="outlined"
+            >
+              {t('back')}
+            </Button>
+          )}
           <Button
             type="submit"
             id="submit-button"
@@ -369,6 +423,16 @@ export default function TaskShow() {
           >
             {submitButtonText}
           </Button>
+          {canGoForward && (
+            <Button
+              id="forward-button"
+              onClick={handleGoForward}
+              disabled={formButtonsDisabled || navLoading}
+              variant="outlined"
+            >
+              {t('forward')}
+            </Button>
+          )}
           {closeButton}
           <>
             {taskWithTaskData.signal_buttons.map((signal) => (

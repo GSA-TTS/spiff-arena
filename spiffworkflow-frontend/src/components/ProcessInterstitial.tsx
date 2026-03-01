@@ -11,7 +11,11 @@ import CustomForm from './CustomForm';
 import ConsolePanel from './ConsolePanel';
 import { ProcessInstance, ProcessInstanceTask, Task } from '../interfaces';
 import useAPIError from '../hooks/UseApiError';
-import { HUMAN_TASK_TYPES, recursivelyChangeNullAndUndefined } from '../helpers';
+import useTaskNavigation from '../hooks/useTaskNavigation';
+import {
+  HUMAN_TASK_TYPES,
+  recursivelyChangeNullAndUndefined,
+} from '../helpers';
 import { getAndRemoveLastProcessInstanceRunLocation } from '../services/LocalStorageService';
 
 type OwnProps = {
@@ -49,6 +53,14 @@ export default function ProcessInterstitial({
   const { t } = useTranslation();
   const { addError, removeError } = useAPIError();
 
+  const {
+    canGoBack,
+    canGoForward,
+    goBack,
+    goForward,
+    loading: navLoading,
+  } = useTaskNavigation(processInstanceId, activeHumanTask?.guid);
+
   useEffect(() => {
     const abortController = new AbortController();
     setState('RUNNING');
@@ -76,7 +88,9 @@ export default function ProcessInterstitial({
         }
       },
       onerror(error: any) {
-        if (abortController.signal.aborted) return;
+        if (abortController.signal.aborted) {
+          return;
+        }
         setState('CLOSED');
         const wasAbortedError = /\baborted\b/.test(error.message);
         if (!wasAbortedError) {
@@ -85,7 +99,9 @@ export default function ProcessInterstitial({
         }
       },
       onclose() {
-        if (abortController.signal.aborted) return;
+        if (abortController.signal.aborted) {
+          return;
+        }
         setState('CLOSED');
       },
     });
@@ -311,11 +327,47 @@ export default function ProcessInterstitial({
     return index < 4 ? `user_instructions_${index}` : `user_instructions_4`;
   };
 
+  const handleGoBack = async () => {
+    if (formButtonsDisabled || navLoading) {
+      return;
+    }
+    setFormButtonsDisabled(true);
+    const newTaskGuid = await goBack();
+    if (newTaskGuid) {
+      navigate(`/tasks/${processInstanceId}/${newTaskGuid}`);
+    } else {
+      setFormButtonsDisabled(false);
+    }
+  };
+
+  const handleGoForward = async () => {
+    if (formButtonsDisabled || navLoading || !inlineTaskData) {
+      return;
+    }
+    setFormButtonsDisabled(true);
+    removeError();
+    const dataToSubmit = recursivelyChangeNullAndUndefined(
+      { ...inlineTaskData },
+      null,
+    );
+    delete dataToSubmit.isManualTask;
+    const result = await goForward(dataToSubmit);
+    if (result && result.process_instance_id && result.id) {
+      navigate(`/tasks/${result.process_instance_id}/${result.id}`);
+    } else {
+      setFormButtonsDisabled(false);
+    }
+  };
+
   const handleInlineFormSubmit = (formObject: any, _event: any) => {
-    if (formButtonsDisabled || !activeHumanTask) return;
+    if (formButtonsDisabled || !activeHumanTask) {
+      return;
+    }
 
     const dataToSubmit = formObject?.formData;
-    if (!dataToSubmit) return;
+    if (!dataToSubmit) {
+      return;
+    }
 
     setFormButtonsDisabled(true);
     removeError();
@@ -346,7 +398,9 @@ export default function ProcessInterstitial({
   };
 
   const inlineFormElement = () => {
-    if (!activeHumanTask) return null;
+    if (!activeHumanTask) {
+      return null;
+    }
 
     let formUiSchema;
     let jsonSchema = activeHumanTask.form_schema;
@@ -398,6 +452,16 @@ export default function ProcessInterstitial({
           uiSchema={formUiSchema}
         >
           <Stack direction="row" spacing={2}>
+            {canGoBack && (
+              <Button
+                id="back-button"
+                onClick={handleGoBack}
+                disabled={formButtonsDisabled || navLoading}
+                variant="outlined"
+              >
+                {t('back')}
+              </Button>
+            )}
             <Button
               type="submit"
               id="submit-button"
@@ -406,6 +470,16 @@ export default function ProcessInterstitial({
             >
               {submitButtonText}
             </Button>
+            {canGoForward && (
+              <Button
+                id="forward-button"
+                onClick={handleGoForward}
+                disabled={formButtonsDisabled || navLoading}
+                variant="outlined"
+              >
+                {t('forward')}
+              </Button>
+            )}
           </Stack>
         </CustomForm>
       </Box>

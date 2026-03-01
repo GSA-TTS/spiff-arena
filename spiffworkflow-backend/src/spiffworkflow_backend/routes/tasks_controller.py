@@ -1108,6 +1108,201 @@ def _get_tasks(
     return make_response(jsonify(response_json), 200)
 
 
+def task_navigation_history(
+    process_instance_id: int,
+) -> flask.wrappers.Response:
+    """Get an ordered list of completed human tasks + current READY task for navigation."""
+    _find_process_instance_for_me_or_raise(process_instance_id)
+
+    completed_human_tasks = (
+        HumanTaskModel.query.filter_by(process_instance_id=process_instance_id, completed=True)
+        .order_by(HumanTaskModel.id.asc())  # type: ignore
+        .all()
+    )
+
+    current_human_task = (
+        HumanTaskModel.query.filter_by(process_instance_id=process_instance_id, completed=False)
+        .order_by(HumanTaskModel.id.asc())  # type: ignore
+        .first()
+    )
+
+    from spiffworkflow_backend.models.task_navigation_snapshot import TaskNavigationSnapshotModel
+
+    entries = []
+    for ht in completed_human_tasks:
+        snapshot = TaskNavigationSnapshotModel.query.filter_by(
+            process_instance_id=process_instance_id,
+            task_guid=ht.task_id,
+        ).first()
+        entries.append(
+            {
+                "task_guid": ht.task_id,
+                "task_name": ht.task_name,
+                "task_title": ht.task_title,
+                "task_type": ht.task_type,
+                "completed": True,
+                "is_current": False,
+                "has_snapshot": snapshot is not None,
+            }
+        )
+
+    if current_human_task:
+        entries.append(
+            {
+                "task_guid": current_human_task.task_id,
+                "task_name": current_human_task.task_name,
+                "task_title": current_human_task.task_title,
+                "task_type": current_human_task.task_type,
+                "completed": False,
+                "is_current": True,
+                "has_snapshot": False,
+            }
+        )
+
+    return make_response(jsonify({"navigation_items": entries}), 200)
+
+
+def task_navigate_back(
+    process_instance_id: int,
+    to_task_guid: str,
+) -> flask.wrappers.Response:
+    """Navigate back to a previously completed human task.
+
+    Snapshots completed task data from the target onward, then resets the process.
+    """
+    process_instance = _find_process_instance_for_me_or_raise(process_instance_id)
+
+    if not process_instance.can_navigate_tasks():
+        raise ApiError(
+            error_code="process_instance_cannot_navigate",
+            message=(
+                f"Process Instance ({process_instance.id}) has status "
+                f"{process_instance.status} which does not support task navigation."
+            ),
+            status_code=400,
+        )
+
+    # Validate target is a completed human task
+    target_human_task = HumanTaskModel.query.filter_by(
+        process_instance_id=process_instance_id,
+        task_id=to_task_guid,
+        completed=True,
+    ).first()
+    if target_human_task is None:
+        raise ApiError(
+            error_code="task_not_found",
+            message=f"Cannot find a completed human task with guid {to_task_guid} for this process instance.",
+            status_code=404,
+        )
+
+    # Snapshot all completed human task data from target onward
+    TaskService.snapshot_human_task_data_for_navigation(process_instance_id, to_task_guid)
+    db.session.commit()
+
+    # Perform the reset (destructive — drops descendant tasks)
+    try:
+        ProcessInstanceProcessor.reset_process(process_instance, to_task_guid)
+    except Exception as e:
+        raise ApiError(
+            error_code="reset_failed",
+            message=f"Failed to reset process instance: {str(e)}",
+            status_code=500,
+        ) from e
+
+    # After reset, the process is suspended — set it to user_input_required
+    process_instance.status = ProcessInstanceStatus.user_input_required.value
+    db.session.add(process_instance)
+    db.session.commit()
+
+    # Load snapshot data into draft data for the target task form pre-fill
+    target_task_model = TaskModel.query.filter_by(
+        process_instance_id=process_instance_id,
+        guid=to_task_guid,
+    ).first()
+    if target_task_model:
+        TaskService.load_snapshot_into_draft_data(process_instance_id, target_task_model)
+        db.session.commit()
+
+    return make_response(
+        jsonify(
+            {
+                "ok": True,
+                "task_guid": to_task_guid,
+                "process_instance_id": process_instance_id,
+            }
+        ),
+        200,
+    )
+
+
+def task_navigate_forward(
+    process_instance_id: int,
+    body: dict[str, Any] | None = None,
+) -> flask.wrappers.Response:
+    """Submit the current READY task and advance forward, pre-filling with snapshot data if available."""
+    process_instance = _find_process_instance_for_me_or_raise(process_instance_id)
+
+    if not process_instance.can_navigate_tasks():
+        raise ApiError(
+            error_code="process_instance_cannot_navigate",
+            message=(
+                f"Process Instance ({process_instance.id}) has status "
+                f"{process_instance.status} which does not support task navigation."
+            ),
+            status_code=400,
+        )
+
+    if body is None:
+        body = {}
+
+    # Find the current READY human task
+    principal = _find_principal_or_raise()
+    current_human_task = TaskService.next_human_task_for_user(process_instance_id, principal.user_id)
+    if current_human_task is None:
+        raise ApiError(
+            error_code="no_ready_task",
+            message="No ready human task found for this process instance.",
+            status_code=400,
+        )
+
+    current_task_guid = current_human_task.task_id
+
+    # Submit the current task using existing shared logic
+    response_item = _task_submit_shared(process_instance_id, current_task_guid, body)
+
+    # Check if the next task has snapshot data to pre-fill
+    next_task: Any = None
+    if "next_task_assigned_to_me" in response_item:
+        next_task = response_item["next_task_assigned_to_me"]
+    elif "next_task" in response_item:
+        next_task = response_item["next_task"]
+
+    has_snapshot = False
+    if next_task is not None:
+        next_task_guid = next_task.id if hasattr(next_task, "id") else next_task.get("id")
+        if next_task_guid:
+            next_task_model = TaskModel.query.filter_by(
+                process_instance_id=process_instance_id,
+                guid=next_task_guid,
+            ).first()
+            if next_task_model:
+                has_snapshot = TaskService.load_snapshot_into_draft_data(process_instance_id, next_task_model)
+                db.session.commit()
+
+            # If no snapshot for the next task, we've passed the high water mark — clear all snapshots
+            if not has_snapshot:
+                TaskService.clear_navigation_snapshots(process_instance_id)
+                db.session.commit()
+
+    if next_task is not None:
+        result = dataclasses.asdict(next_task) if hasattr(next_task, "__dataclass_fields__") else next_task
+        result["has_snapshot"] = has_snapshot
+        return make_response(jsonify(result), 200)
+
+    response_item["has_snapshot"] = False
+    return make_response(jsonify(response_item), 200)
+
+
 def _get_potential_owner_usernames(assigned_user: AliasedClass) -> Any:
     potential_owner_usernames_from_group_concat_or_similar = func.group_concat(assigned_user.username.distinct()).label(
         "potential_owner_usernames"

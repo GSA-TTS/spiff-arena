@@ -98,6 +98,9 @@ from spiffworkflow_backend.models.kkv_data_store_entry import (
 from spiffworkflow_backend.models.task_draft_data import (
     TaskDraftDataModel,
 )  # noqa: F401
+from spiffworkflow_backend.models.task_navigation_snapshot import (
+    TaskNavigationSnapshotModel,
+)  # noqa: F401
 from spiffworkflow_backend.models.configuration import (
     ConfigurationModel,
 )  # noqa: F401

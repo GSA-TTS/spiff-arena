@@ -75,6 +75,7 @@ class ProcessInstanceModel(SpiffworkflowBaseDBModel):
     bpmn_process = relationship(BpmnProcessModel, cascade="delete")
     tasks = relationship("TaskModel", cascade="delete")
     task_draft_data = relationship("TaskDraftDataModel", cascade="delete")  # type: ignore
+    task_navigation_snapshots = relationship("TaskNavigationSnapshotModel", cascade="delete")  # type: ignore
     process_instance_events = relationship("ProcessInstanceEventModel", cascade="delete")  # type: ignore
     process_instance_file_data = relationship("ProcessInstanceFileDataModel", cascade="delete")  # type: ignore
     human_tasks = relationship(
@@ -172,6 +173,14 @@ class ProcessInstanceModel(SpiffworkflowBaseDBModel):
 
     def can_submit_task(self) -> bool:
         return not self.has_terminal_status() and self.status != "suspended"
+
+    def can_navigate_tasks(self) -> bool:
+        """Whether this instance supports back/forward navigation through human tasks.
+
+        Allows navigation in error and suspended states (unlike can_submit_task),
+        but not in terminal complete/terminated states.
+        """
+        return self.status not in ["complete", "terminated"]
 
     def allowed_to_run(self) -> bool:
         """If this process can currently move forward with things like do_engine_steps."""

@@ -3333,6 +3333,83 @@ paths:
               schema:
                 $ref: "#/components/schemas/Task"
 
+  /tasks/{process_instance_id}/navigation-history:
+    parameters:
+      - name: process_instance_id
+        in: path
+        required: true
+        description: The unique id of an existing process instance.
+        schema:
+          type: integer
+    get:
+      operationId: spiffworkflow_backend.routes.tasks_controller.task_navigation_history
+      summary: Get ordered list of completed human tasks for back/forward navigation
+      tags:
+        - Tasks
+      responses:
+        "200":
+          description: List of navigation entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+
+  /tasks/{process_instance_id}/navigate-back/{to_task_guid}:
+    parameters:
+      - name: process_instance_id
+        in: path
+        required: true
+        description: The unique id of an existing process instance.
+        schema:
+          type: integer
+      - name: to_task_guid
+        in: path
+        required: true
+        description: The guid of the task to navigate back to.
+        schema:
+          type: string
+    post:
+      operationId: spiffworkflow_backend.routes.tasks_controller.task_navigate_back
+      summary: Navigate back to a previously completed human task
+      tags:
+        - Tasks
+      responses:
+        "200":
+          description: Task info for the target task after reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+
+  /tasks/{process_instance_id}/navigate-forward:
+    parameters:
+      - name: process_instance_id
+        in: path
+        required: true
+        description: The unique id of an existing process instance.
+        schema:
+          type: integer
+    post:
+      operationId: spiffworkflow_backend.routes.tasks_controller.task_navigate_forward
+      summary: Submit current task and advance forward, pre-filling with snapshot data if available
+      tags:
+        - Tasks
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Next task info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+
   /message-models:
     get:
       tags:
