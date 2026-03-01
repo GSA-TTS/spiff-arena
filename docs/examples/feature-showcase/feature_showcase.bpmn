@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:spiffworkflow="http://spiffworkflow.org/bpmn/schema/1.0/core" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Camunda Modeler" exporterVersion="3.0.0-dev">
+  <bpmn:process id="Process_feature_showcase" isExecutable="true">
+
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Script Task: uses code module functions + console output -->
+    <bpmn:scriptTask id="Activity_InitOrder" name="Initialize Order" scriptFormat="python">
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+      <bpmn:script>
+# ---- Code Module Demo ----
+# These functions come from helpers.py (the process model's code module).
+# They are automatically available in any script context.
+
+customer_name = "Alice Johnson"
+
+order_items = [
+    {"name": "Widget A", "price": 29.99, "qty": 3},
+    {"name": "Widget B", "price": 149.50, "qty": 2},
+    {"name": "Gadget C", "price": 9.99,  "qty": 5},
+]
+
+# ---- Console Output Demo ----
+# print() output is captured and streamed to the frontend console panel.
+print("=== Order Initialization ===")
+print(f"Customer: {customer_name}")
+
+order_total = calculate_order_total(order_items)
+print(f"Order total: {format_currency(order_total)}")
+
+priority = get_priority(order_total)
+print(f"Priority: {priority}")
+
+created_at = get_current_timestamp()
+print(f"Created at: {created_at}")
+print("============================")
+
+view_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Manual Task 1: Review Order -->
+    <!-- preScript runs once when the task becomes ready -->
+    <!-- formLoadScript runs each time the task is fetched/viewed -->
+    <bpmn:manualTask id="Activity_ReviewOrder" name="Review Order">
+      <bpmn:extensionElements>
+        <spiffworkflow:preScript>
+# ---- PreScript Demo ----
+# Runs once when this task is created. Uses code module function.
+print("PreScript: Preparing review for " + customer_name)
+formatted_total = format_currency(order_total)
+        </spiffworkflow:preScript>
+        <spiffworkflow:formLoadScript>
+# ---- FormLoadScript Demo ----
+# Runs every time this task is fetched/viewed.
+# Great for counters, timestamps, or refreshing external data.
+view_count = view_count + 1
+last_viewed = get_current_timestamp()
+print(f"FormLoadScript: Review task viewed {view_count} time(s)")
+        </spiffworkflow:formLoadScript>
+        <spiffworkflow:instructionsForEndUser>
+## Order Review
+
+**Customer:** {{ customer_name }}
+
+| Item | Price | Qty | Subtotal |
+|------|-------|-----|----------|
+{% for item in order_items %}| {{ item.name }} | ${{ item.price }} | {{ item.qty }} | ${{ "%.2f"|format(item.price * item.qty) }} |
+{% endfor %}
+
+**Order Total:** {{ formatted_total }}
+**Priority:** {{ priority }}
+**Created:** {{ created_at }}
+
+---
+*This task has been viewed {{ view_count }} time(s). Last viewed: {{ last_viewed }}*
+
+*The view count increments because of the **formLoadScript** running on each page load.*
+
+*Click Continue to proceed to the confirmation step, where you can use the **Back** button to return here.*
+        </spiffworkflow:instructionsForEndUser>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_3</bpmn:outgoing>
+    </bpmn:manualTask>
+
+    <!-- Manual Task 2: Confirm Submission -->
+    <bpmn:manualTask id="Activity_ConfirmSubmission" name="Confirm Submission">
+      <bpmn:extensionElements>
+        <spiffworkflow:preScript>
+# ---- PreScript Demo (Task 2) ----
+print("PreScript: Order ready for final confirmation")
+confirmation_timestamp = get_current_timestamp()
+        </spiffworkflow:preScript>
+        <spiffworkflow:formLoadScript>
+# ---- FormLoadScript Demo (Task 2) ----
+view_count = view_count + 1
+last_viewed = get_current_timestamp()
+print(f"FormLoadScript: Confirmation task viewed {view_count} time(s)")
+        </spiffworkflow:formLoadScript>
+        <spiffworkflow:instructionsForEndUser>
+## Confirm Submission
+
+You are about to submit the following order:
+
+- **Customer:** {{ customer_name }}
+- **Total:** {{ formatted_total }}
+- **Priority:** {{ priority }}
+- **Confirmation prepared at:** {{ confirmation_timestamp }}
+
+---
+
+### Features demonstrated in this workflow:
+
+1. **Code Module** (`helpers.py`): `calculate_order_total()`, `format_currency()`, `get_priority()`, `get_current_timestamp()` — all defined in the process model's Python file and available everywhere.
+
+2. **PreScript**: Ran before each manual task to prepare display data (e.g., `formatted_total`). Check the console panel to see the print output.
+
+3. **FormLoadScript**: The view counter above increments each time you load this page. Navigate away and back to see it change.
+
+4. **Console Output**: Open the console panel to see all `print()` output from scripts, preScripts, and formLoadScripts.
+
+5. **Task Metadata Extraction**: `customer_name`, `priority`, and `order_total` are extracted into task metadata via model-level `task_metadata_extraction_paths` and visible in task list APIs.
+
+6. **Back Button**: Use the Back button to return to the Review Order step. Your view count will persist because formLoadScript runs on reload.
+
+---
+*Total page views across both tasks: {{ view_count }}*
+
+*Click Continue to complete the workflow.*
+        </spiffworkflow:instructionsForEndUser>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_3</bpmn:incoming>
+      <bpmn:outgoing>Flow_4</bpmn:outgoing>
+    </bpmn:manualTask>
+
+    <bpmn:endEvent id="EndEvent_1">
+      <bpmn:incoming>Flow_4</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Activity_InitOrder" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Activity_InitOrder" targetRef="Activity_ReviewOrder" />
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Activity_ReviewOrder" targetRef="Activity_ConfirmSubmission" />
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Activity_ConfirmSubmission" targetRef="EndEvent_1" />
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_feature_showcase">
+      <bpmndi:BPMNShape id="_BPMNShape_StartEvent_2" bpmnElement="StartEvent_1">
+        <dc:Bounds x="179" y="159" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_InitOrder_di" bpmnElement="Activity_InitOrder">
+        <dc:Bounds x="270" y="137" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_ReviewOrder_di" bpmnElement="Activity_ReviewOrder">
+        <dc:Bounds x="430" y="137" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_ConfirmSubmission_di" bpmnElement="Activity_ConfirmSubmission">
+        <dc:Bounds x="590" y="137" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="EndEvent_1_di" bpmnElement="EndEvent_1">
+        <dc:Bounds x="752" y="159" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <di:waypoint x="215" y="177" />
+        <di:waypoint x="270" y="177" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="370" y="177" />
+        <di:waypoint x="430" y="177" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_3_di" bpmnElement="Flow_3">
+        <di:waypoint x="530" y="177" />
+        <di:waypoint x="590" y="177" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4">
+        <di:waypoint x="690" y="177" />
+        <di:waypoint x="752" y="177" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
