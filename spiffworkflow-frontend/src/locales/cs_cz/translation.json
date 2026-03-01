@@ -525,5 +525,6 @@
   "waiting_for": "Čeká na",
   "was_active": "byla aktivní",
   "workflows_created_by_me": "Procesy vytvořené mnou",
-  "yes": "Ano"
+  "yes": "Ano",
+  "form_load_script": "Skript při načtení formuláře"
 }

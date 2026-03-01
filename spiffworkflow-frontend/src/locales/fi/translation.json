@@ -525,5 +525,6 @@
   "waiting_for": "Odottaa",
   "was_active": "oli aktiivinen",
   "workflows_created_by_me": "Luoamani työnkulut",
-  "yes": "Kyllä"
+  "yes": "Kyllä",
+  "form_load_script": "Lomakkeen latausskripti"
 }

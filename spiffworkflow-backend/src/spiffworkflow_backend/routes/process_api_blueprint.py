@@ -646,6 +646,37 @@ def _get_task_model_from_guid_or_raise(task_guid: str, process_instance_id: int 
     return task_model
 
 
+def _execute_form_load_script(
+    process_instance: ProcessInstanceModel,
+    task_model: TaskModel,
+    form_load_script: str,
+) -> dict[str, Any]:
+    """Execute a form load script for a human task and return the (possibly updated) task data."""
+    processor = ProcessInstanceProcessor(
+        process_instance,
+        include_task_data_for_completed_tasks=False,
+    )
+    spiff_task = _get_spiff_task_from_processor(task_model.guid, processor)
+
+    try:
+        processor.bpmn_process_instance.script_engine.execute(spiff_task, form_load_script)
+    except Exception as e:
+        current_app.logger.error(
+            f"Error executing form load script for task {task_model.guid}: {e}"
+        )
+        return dict(task_model.data or {})
+
+    new_data: dict[str, Any] = spiff_task.data
+    new_json_data_dict = JsonDataModel.json_data_dict_from_dict(new_data)
+    if new_json_data_dict["hash"] != task_model.json_data_hash:
+        JsonDataModel.insert_or_update_json_data_dict(new_json_data_dict)
+        task_model.json_data_hash = new_json_data_dict["hash"]
+        db.session.add(task_model)
+        db.session.commit()
+
+    return new_data
+
+
 def _get_task_model_for_request(
     process_instance_id: int,
     task_guid: str = "next",
@@ -718,6 +749,13 @@ def _get_task_model_for_request(
             saved_form_data = task_draft_data.get_saved_form_data()
 
         task_model.data = task_model.get_data()
+
+        form_load_script = extensions.get("formLoadScript")
+        if form_load_script and task_definition.typename in ("UserTask", "ManualTask"):
+            task_model.data = _execute_form_load_script(
+                process_instance, task_model, form_load_script
+            )
+
         task_model.saved_form_data = saved_form_data
         if task_definition.typename == "UserTask":
             if not form_schema_file_name:

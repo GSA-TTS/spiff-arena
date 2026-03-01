@@ -526,5 +526,6 @@
   "waiting_for": "En attente de",
   "was_active": "était actif",
   "workflows_created_by_me": "Flux de travail créés par moi",
-  "yes": "Oui"
+  "yes": "Oui",
+  "form_load_script": "Script de chargement du formulaire"
 }

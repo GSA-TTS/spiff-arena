@@ -525,5 +525,6 @@
   "waiting_for": "等待",
   "was_active": "曾活动",
   "workflows_created_by_me": "我创建的工作流",
-  "yes": "是"
+  "yes": "是",
+  "form_load_script": "表单加载脚本"
 }

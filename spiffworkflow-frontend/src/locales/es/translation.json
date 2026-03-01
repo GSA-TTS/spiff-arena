@@ -525,5 +525,6 @@
   "waiting_for": "Esperando por",
   "was_active": "estaba activa",
   "workflows_created_by_me": "Flujos de trabajo creados por mí",
-  "yes": "Sí"
+  "yes": "Sí",
+  "form_load_script": "Script de carga de formulario"
 }
