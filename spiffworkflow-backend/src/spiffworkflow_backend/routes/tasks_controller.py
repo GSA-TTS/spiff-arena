@@ -84,7 +84,9 @@ def _apply_json_metadata_filter(query: Any) -> Any:
             if ":" in filter_pair:
                 filter_key, filter_value = filter_pair.split(":", 1)
                 if current_app.config["SPIFFWORKFLOW_BACKEND_DATABASE_TYPE"] == "postgres":
-                    query = query.filter(json_metadata_column[filter_key].astext == filter_value)
+                    query = query.filter(
+                        func.json_extract_path_text(json_metadata_column, filter_key) == filter_value
+                    )
                 else:
                     query = query.filter(
                         func.json_extract(json_metadata_column, f"$.{filter_key}") == filter_value
