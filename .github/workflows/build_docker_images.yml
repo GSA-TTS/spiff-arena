@@ -139,7 +139,7 @@ jobs:
           set -euxo pipefail
           VERSION=0.65.0
           ASSET="trivy_${VERSION}_Linux-64bit.tar.gz"
-          URL="https://github.com/aquasecurity/trivy/releases/download/v${VERSION}/${ASSET}"
+          URL="https://github.com/aquasecurity/trivy/archive/refs/tags/v0.65.0.tar.gz"
           mkdir -p /tmp/trivy && cd /tmp/trivy
           curl -fL -o "$ASSET" "$URL"
           tar -xzf "$ASSET"
