@@ -126,6 +126,39 @@ export default function ProcessInterstitial({
     return allowRedirect && state === 'CLOSED';
   }, [allowRedirect, state]);
 
+  const loadTaskInline = useCallback(
+    (taskProcessInstanceId: number, taskGuid: string) => {
+      HttpService.makeCallToBackend({
+        path: `/tasks/${taskProcessInstanceId}/${taskGuid}?with_form_data=true`,
+        successCallback: (result: Task) => {
+          setActiveHumanTask(result);
+          const variableName = result.extensions?.variableName;
+          let taskDataToUse;
+          if (result.saved_form_data) {
+            taskDataToUse = result.saved_form_data;
+          } else if (
+            typeof variableName !== 'undefined' &&
+            variableName != null &&
+            typeof result.data[variableName] !== 'undefined'
+          ) {
+            taskDataToUse = result.data[variableName];
+          } else {
+            taskDataToUse = result.data;
+          }
+          setInlineTaskData(
+            recursivelyChangeNullAndUndefined(taskDataToUse, undefined),
+          );
+          setFormButtonsDisabled(false);
+        },
+        failureCallback: (error: any) => {
+          addError(error);
+          setFormButtonsDisabled(false);
+        },
+      });
+    },
+    [addError],
+  );
+
   useEffect(() => {
     // Added this separate use effect so that the timer interval will be cleared if
     // we end up redirecting back to the TaskShow page.
@@ -133,31 +166,7 @@ export default function ProcessInterstitial({
       if (withConsole) {
         // Don't redirect — fetch full task data and render form inline
         if (!activeHumanTask) {
-          HttpService.makeCallToBackend({
-            path: `/tasks/${lastTask.process_instance_id}/${lastTask.id}?with_form_data=true`,
-            successCallback: (result: Task) => {
-              setActiveHumanTask(result);
-              const variableName = result.extensions?.variableName;
-              let taskDataToUse;
-              if (result.saved_form_data) {
-                taskDataToUse = result.saved_form_data;
-              } else if (
-                typeof variableName !== 'undefined' &&
-                variableName != null &&
-                typeof result.data[variableName] !== 'undefined'
-              ) {
-                taskDataToUse = result.data[variableName];
-              } else {
-                taskDataToUse = result.data;
-              }
-              setInlineTaskData(
-                recursivelyChangeNullAndUndefined(taskDataToUse, undefined),
-              );
-            },
-            failureCallback: (error: any) => {
-              addError(error);
-            },
-          });
+          loadTaskInline(lastTask.process_instance_id, lastTask.id);
         }
         return undefined;
       }
@@ -334,7 +343,13 @@ export default function ProcessInterstitial({
     setFormButtonsDisabled(true);
     const newTaskGuid = await goBack();
     if (newTaskGuid) {
-      navigate(`/tasks/${processInstanceId}/${newTaskGuid}`);
+      if (withConsole) {
+        setActiveHumanTask(null);
+        setInlineTaskData(null);
+        loadTaskInline(processInstanceId, newTaskGuid);
+      } else {
+        navigate(`/tasks/${processInstanceId}/${newTaskGuid}`);
+      }
     } else {
       setFormButtonsDisabled(false);
     }
@@ -353,7 +368,13 @@ export default function ProcessInterstitial({
     delete dataToSubmit.isManualTask;
     const result = await goForward(dataToSubmit);
     if (result && result.process_instance_id && result.id) {
-      navigate(`/tasks/${result.process_instance_id}/${result.id}`);
+      if (withConsole) {
+        setActiveHumanTask(null);
+        setInlineTaskData(null);
+        loadTaskInline(result.process_instance_id, result.id);
+      } else {
+        navigate(`/tasks/${result.process_instance_id}/${result.id}`);
+      }
     } else {
       setFormButtonsDisabled(false);
     }
