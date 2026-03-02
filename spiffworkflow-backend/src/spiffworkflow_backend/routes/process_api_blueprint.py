@@ -650,21 +650,30 @@ def _execute_form_load_script(
     process_instance: ProcessInstanceModel,
     task_model: TaskModel,
     form_load_script: str,
-) -> dict[str, Any]:
-    """Execute a form load script for a human task and return the (possibly updated) task data."""
+    with_console: bool = False,
+) -> tuple[dict[str, Any], list[str]]:
+    """Execute a form load script for a human task and return the (possibly updated) task data and console lines."""
     processor = ProcessInstanceProcessor(
         process_instance,
         include_task_data_for_completed_tasks=False,
     )
     spiff_task = _get_spiff_task_from_processor(task_model.guid, processor)
 
+    console_lines: list[str] = []
     try:
-        processor.bpmn_process_instance.script_engine.execute(spiff_task, form_load_script)
+        if with_console:
+            from spiffworkflow_backend.services.console_output_service import console_capture
+
+            with console_capture() as console_buf:
+                processor.bpmn_process_instance.script_engine.execute(spiff_task, form_load_script)
+            console_lines = console_buf.drain()
+        else:
+            processor.bpmn_process_instance.script_engine.execute(spiff_task, form_load_script)
     except Exception as e:
         current_app.logger.error(
             f"Error executing form load script for task {task_model.guid}: {e}"
         )
-        return dict(task_model.data or {})
+        return dict(task_model.data or {}), console_lines
 
     new_data: dict[str, Any] = spiff_task.data
     new_json_data_dict = JsonDataModel.json_data_dict_from_dict(new_data)
@@ -674,14 +683,15 @@ def _execute_form_load_script(
         db.session.add(task_model)
         db.session.commit()
 
-    return new_data
+    return new_data, console_lines
 
 
 def _get_task_model_for_request(
     process_instance_id: int,
     task_guid: str = "next",
     with_form_data: bool = False,
-) -> TaskModel:
+    with_console: bool = False,
+) -> tuple[TaskModel, list[str]]:
     process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
 
     if process_instance.status == ProcessInstanceStatus.suspended.value:
@@ -750,10 +760,11 @@ def _get_task_model_for_request(
 
         task_model.data = task_model.get_data()
 
+        console_lines: list[str] = []
         form_load_script = extensions.get("formLoadScript")
         if form_load_script and task_definition.typename in ("UserTask", "ManualTask"):
-            task_model.data = _execute_form_load_script(
-                process_instance, task_model, form_load_script
+            task_model.data, console_lines = _execute_form_load_script(
+                process_instance, task_model, form_load_script, with_console=with_console
             )
 
         task_model.saved_form_data = saved_form_data
@@ -796,7 +807,8 @@ def _get_task_model_for_request(
         extensions["instructionsForEndUser"] = JinjaService.render_instructions_for_end_user(task_model, extensions)
 
     task_model.extensions = extensions
-    return task_model
+    console_lines_to_return = console_lines if with_form_data else []
+    return task_model, console_lines_to_return
 
 
 # originally from: https://bitcoden.com/answers/python-nested-dictionary-update-value-where-any-nested-key-matches

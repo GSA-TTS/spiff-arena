@@ -128,9 +128,19 @@ export default function ProcessInterstitial({
 
   const loadTaskInline = useCallback(
     (taskProcessInstanceId: number, taskGuid: string) => {
+      let taskUrl = `/tasks/${taskProcessInstanceId}/${taskGuid}?with_form_data=true`;
+      if (withConsole) {
+        taskUrl += '&with_console=true';
+      }
       HttpService.makeCallToBackend({
-        path: `/tasks/${taskProcessInstanceId}/${taskGuid}?with_form_data=true`,
-        successCallback: (result: Task) => {
+        path: taskUrl,
+        successCallback: (result: any) => {
+          if (result.console_lines && result.console_lines.length > 0) {
+            setConsoleLines((prev: string[]) => [
+              ...prev,
+              ...result.console_lines,
+            ]);
+          }
           setActiveHumanTask(result);
           const variableName = result.extensions?.variableName;
           let taskDataToUse;
@@ -156,7 +166,7 @@ export default function ProcessInterstitial({
         },
       });
     },
-    [addError],
+    [addError, withConsole],
   );
 
   useEffect(() => {

@@ -496,12 +496,18 @@ def task_show(
     process_instance_id: int,
     task_guid: str = "next",
     with_form_data: bool = False,
+    with_console: bool = False,
 ) -> flask.wrappers.Response:
-    task_model = _get_task_model_for_request(
+    task_model, console_lines = _get_task_model_for_request(
         process_instance_id=process_instance_id,
         task_guid=task_guid,
         with_form_data=with_form_data,
+        with_console=with_console,
     )
+    if console_lines:
+        result = dataclasses.asdict(task_model)
+        result["console_lines"] = console_lines
+        return make_response(jsonify(result), 200)
     return make_response(jsonify(task_model), 200)
 
 

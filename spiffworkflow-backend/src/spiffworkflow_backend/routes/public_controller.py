@@ -147,7 +147,7 @@ def form_show(
     process_instance_id: int,
     task_guid: str,
 ) -> flask.wrappers.Response:
-    task_model = _get_task_model_for_request(
+    task_model, _console_lines = _get_task_model_for_request(
         process_instance_id=process_instance_id,
         task_guid=task_guid,
         with_form_data=True,
