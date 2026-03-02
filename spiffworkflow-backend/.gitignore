@@ -15,7 +15,8 @@
 /local_wheels/*.whl
 /log/*.log
 /process.json
-/process_models
+/process_models/*
+!/process_models/examples/
 /pyrightconfig.json
 /some_cache_dir
 /spiffworkflow_backend.svg

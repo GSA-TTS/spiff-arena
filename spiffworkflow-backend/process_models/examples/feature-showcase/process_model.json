@@ -1,0 +1,14 @@
+{
+  "display_name": "Feature Showcase",
+  "description": "Demonstrates code modules, preScript, formLoadScript, console output, task metadata extraction, and back-button navigation.",
+  "primary_file_name": "feature_showcase.bpmn",
+  "primary_process_id": "Process_feature_showcase",
+  "fault_or_suspend_on_exception": "fault",
+  "exception_notification_addresses": [],
+  "metadata_extraction_paths": null,
+  "task_metadata_extraction_paths": [
+    {"key": "customer_name", "path": "customer_name"},
+    {"key": "priority", "path": "priority"},
+    {"key": "total", "path": "order_total"}
+  ]
+}
