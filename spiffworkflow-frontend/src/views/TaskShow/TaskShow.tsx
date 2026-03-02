@@ -84,6 +84,18 @@ export default function TaskShow() {
     (result: BasicTask) => {
       setBasicTask(result);
       setPageTitle([result.name_for_display]);
+
+      // If this PI was started with console mode, redirect to the interstitial
+      const consoleKey = `console_mode_${result.process_instance_id}`;
+      if (localStorage.getItem(consoleKey) === 'true') {
+        navigate(
+          `/process-instances/for-me/${modifyProcessIdentifierForPathParam(
+            result.process_model_identifier,
+          )}/${result.process_instance_id}/interstitial?with_console=true`,
+        );
+        return;
+      }
+
       if (!result.can_complete) {
         if (result.process_model_uses_queued_execution) {
           navigate(

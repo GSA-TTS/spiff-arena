@@ -179,6 +179,8 @@ export default function ProcessInterstitial({
     }
     if (shouldRedirectToProcessInstance()) {
       setIsFadingOut(true);
+      // Clean up console mode preference since the process is done
+      localStorage.removeItem(`console_mode_${processInstanceId}`);
       setTimeout(() => {
         localStorage.setItem(
           'lastProcessInstanceId',
