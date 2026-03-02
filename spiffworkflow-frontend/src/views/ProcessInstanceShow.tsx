@@ -50,6 +50,7 @@ import {
   PlayArrow,
   SyncAltOutlined,
   StopCircleOutlined,
+  ManageAccounts,
 } from '@mui/icons-material';
 import ProcessBreadcrumb from '../components/ProcessBreadcrumb';
 import HttpService from '../services/HttpService';
@@ -182,6 +183,7 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     [targetUris.processModelShowPath]: ['PUT'],
     [targetUris.processModelFileCreatePath]: ['GET'],
     [taskListPath]: ['GET'],
+    [targetUris.adminGroupListPath]: ['GET'],
   };
   const { ability, permissionsLoaded } = usePermissionFetcher(
     permissionRequestData,
@@ -1785,6 +1787,21 @@ export default function ProcessInstanceShow({ variant }: OwnProps) {
     }
     if (ability.can('DELETE', targetUris.processInstanceActionPath)) {
       elements.push(deleteButton());
+    }
+    if (ability.can('GET', targetUris.adminGroupListPath)) {
+      elements.push(
+        <SpiffTooltip
+          key="manage-tasks"
+          title={t('admin_manage_tasks')}
+          placement="top"
+        >
+          <Link to={`/admin/process-instances/${processInstance.id}/tasks`}>
+            <IconButton aria-label={t('admin_manage_tasks')}>
+              <ManageAccounts />
+            </IconButton>
+          </Link>
+        </SpiffTooltip>,
+      );
     }
     let toast = null;
     if (copiedShortLinkToClipboard) {
