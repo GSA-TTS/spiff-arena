@@ -34,6 +34,7 @@ import {
   SettingsApplicationsSharp,
   Extension,
   Flag,
+  AdminPanelSettings,
 } from '@mui/icons-material';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -74,6 +75,7 @@ const routeIdentifiers = {
   DATA_STORES: 'dataStores',
   MESSAGES: 'messages',
   CONFIGURATION: 'configuration',
+  ADMIN: 'admin',
 };
 
 function SideNav({
@@ -99,6 +101,7 @@ function SideNav({
     [targetUris.processGroupListPath]: ['GET'],
     [targetUris.processInstanceListForMePath]: ['POST'],
     [targetUris.secretListPath]: ['GET'],
+    [targetUris.adminGroupListPath]: ['GET'],
   };
   const { ability, permissionsLoaded } = usePermissionFetcher(
     permissionRequestData,
@@ -118,6 +121,8 @@ function SideNav({
     selectedTab = routeIdentifiers.MESSAGES;
   } else if (location.pathname.startsWith('/configuration')) {
     selectedTab = routeIdentifiers.CONFIGURATION;
+  } else if (location.pathname.startsWith('/admin')) {
+    selectedTab = routeIdentifiers.ADMIN;
   }
 
   const versionInfo = appVersionInfo();
@@ -229,6 +234,13 @@ function SideNav({
         targetUris.secretListPath,
         targetUris.authenticationListPath,
       ],
+    },
+    {
+      text: t('admin'),
+      icon: <AdminPanelSettings />,
+      route: '/admin',
+      id: routeIdentifiers.ADMIN,
+      permissionRoutes: [targetUris.adminGroupListPath],
     },
   ];
 

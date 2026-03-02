@@ -43,6 +43,7 @@ export const useUriListForPermissions = () => {
       secretShowValuePath: `/v1.0/secrets/show-value/${params.secret_identifier}`,
       userSearch: `/v1.0/users/search`,
       userExists: `/v1.0/users/exists/by-username`,
+      adminGroupListPath: '/v1.0/admin/groups',
     };
   }, [
     params.secret_identifier,

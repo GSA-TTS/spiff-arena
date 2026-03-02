@@ -607,3 +607,12 @@ export interface NavItem {
   id: string;
   permissionRoutes?: string[];
 }
+
+export interface AdminGroup {
+  id: number;
+  identifier: string;
+  name: string;
+  source_is_open_id: boolean;
+  member_count: number;
+  pending_count: number;
+}

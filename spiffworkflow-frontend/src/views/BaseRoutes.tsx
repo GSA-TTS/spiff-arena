@@ -32,6 +32,7 @@ import Extension from './Extension';
 import ProcessGroupNew from './ProcessGroupNew';
 import ProcessGroupEdit from './ProcessGroupEdit';
 import ProcessModelNewExperimental from './ProcessModelNewExperimental';
+import AdminRoutes from './admin/AdminRoutes';
 
 type OwnProps = {
   setAdditionalNavElement: Function;
@@ -171,6 +172,7 @@ export default function BaseRoutes({
           path="i/:process_instance_id"
           element={<ProcessInstanceShortLink />}
         />
+        <Route path="/admin/*" element={<AdminRoutes />} />
         <Route path="/process-groups/new" element={<ProcessGroupNew />} />
         <Route
           path="/process-groups/:process_group_id/edit"
