@@ -14,7 +14,15 @@ export default function ProcessInterstitialPage({ variant }: OwnProps) {
   const { t } = useTranslation();
   const params = useParams();
   const [searchParams] = useSearchParams();
-  const withConsole = searchParams.get('with_console') === 'true';
+  const withConsoleFromUrl = searchParams.get('with_console') === 'true';
+
+  // Persist console mode in sessionStorage so navigating away and back preserves it
+  const storageKey = `console_mode_${params.process_instance_id}`;
+  if (withConsoleFromUrl) {
+    sessionStorage.setItem(storageKey, 'true');
+  }
+  const withConsole =
+    withConsoleFromUrl || sessionStorage.getItem(storageKey) === 'true';
 
   // TODO: the next version we should support the pi show page in the new ui
   // let processInstanceShowPageUrl = `/process-instances/for-me/${params.process_model_id}/${params.process_instance_id}`;
