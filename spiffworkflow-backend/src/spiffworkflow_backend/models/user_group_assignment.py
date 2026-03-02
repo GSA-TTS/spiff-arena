@@ -18,6 +18,7 @@ class UserGroupAssignmentModel(SpiffworkflowBaseDBModel):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(ForeignKey(UserModel.id), nullable=False, index=True)  # type: ignore
     group_id = db.Column(ForeignKey(GroupModel.id), nullable=False, index=True)
+    annotation: str | None = db.Column(db.Text, nullable=True)
 
     group = relationship("GroupModel", overlaps="groups,user_group_assignments,users")  # type: ignore
     user = relationship("UserModel", overlaps="groups,user_group_assignments,users")  # type: ignore
