@@ -163,19 +163,11 @@ export default function ProcessInterstitial({
     // Added this separate use effect so that the timer interval will be cleared if
     // we end up redirecting back to the TaskShow page.
     if (shouldRedirectToTask(lastTask)) {
-      if (withConsole) {
-        // Don't redirect — fetch full task data and render form inline
-        if (!activeHumanTask) {
-          loadTaskInline(lastTask.process_instance_id, lastTask.id);
-        }
-        return undefined;
+      // Always load the task form inline so back/forward navigation works
+      if (!activeHumanTask) {
+        loadTaskInline(lastTask.process_instance_id, lastTask.id);
       }
-      lastTask.properties.instructionsForEndUser = '';
-      const timerId = setInterval(() => {
-        const taskUrl = `/tasks/${lastTask.process_instance_id}/${lastTask.id}`;
-        navigate(taskUrl);
-      }, 500);
-      return () => clearInterval(timerId);
+      return undefined;
     }
     if (shouldRedirectToProcessInstance()) {
       setIsFadingOut(true);
@@ -202,7 +194,6 @@ export default function ProcessInterstitial({
     shouldRedirectToProcessInstance,
     shouldRedirectToTask,
     state,
-    withConsole,
   ]);
 
   const getLoadingIcon = () => {
@@ -286,10 +277,7 @@ export default function ProcessInterstitial({
       return inlineMessage('', `${message} ${t('no_action_required')}`);
     }
     if (shouldRedirectToTask(myTask)) {
-      if (withConsole) {
-        return getLoadingIcon();
-      }
-      return inlineMessage('', t('redirecting'));
+      return getLoadingIcon();
     }
     if (myTask?.can_complete && HUMAN_TASK_TYPES.includes(myTask.type)) {
       return inlineMessage(
@@ -345,13 +333,9 @@ export default function ProcessInterstitial({
     setFormButtonsDisabled(true);
     const newTaskGuid = await goBack();
     if (newTaskGuid) {
-      if (withConsole) {
-        setActiveHumanTask(null);
-        setInlineTaskData(null);
-        loadTaskInline(processInstanceId, newTaskGuid);
-      } else {
-        navigate(`/tasks/${processInstanceId}/${newTaskGuid}`);
-      }
+      setActiveHumanTask(null);
+      setInlineTaskData(null);
+      loadTaskInline(processInstanceId, newTaskGuid);
     } else {
       setFormButtonsDisabled(false);
     }
@@ -370,13 +354,9 @@ export default function ProcessInterstitial({
     delete dataToSubmit.isManualTask;
     const result = await goForward(dataToSubmit);
     if (result && result.process_instance_id && result.id) {
-      if (withConsole) {
-        setActiveHumanTask(null);
-        setInlineTaskData(null);
-        loadTaskInline(result.process_instance_id, result.id);
-      } else {
-        navigate(`/tasks/${result.process_instance_id}/${result.id}`);
-      }
+      setActiveHumanTask(null);
+      setInlineTaskData(null);
+      loadTaskInline(result.process_instance_id, result.id);
     } else {
       setFormButtonsDisabled(false);
     }
@@ -397,8 +377,12 @@ export default function ProcessInterstitial({
     delete dataToSubmit.isManualTask;
     recursivelyChangeNullAndUndefined(dataToSubmit, null);
 
+    let submitPath = `/tasks/${activeHumanTask.process_instance_id}/${activeHumanTask.guid}`;
+    if (withConsole) {
+      submitPath += '?with_console=true';
+    }
     HttpService.makeCallToBackend({
-      path: `/tasks/${activeHumanTask.process_instance_id}/${activeHumanTask.guid}?with_console=true`,
+      path: submitPath,
       httpMethod: 'PUT',
       postBody: dataToSubmit,
       successCallback: (result: any) => {
