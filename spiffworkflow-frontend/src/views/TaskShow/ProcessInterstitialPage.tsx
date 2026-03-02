@@ -29,7 +29,7 @@ export default function ProcessInterstitialPage({ variant }: OwnProps) {
       sx={{
         flexGrow: 1,
         p: 3,
-        overflow: 'hidden',
+        overflow: withConsole ? 'auto' : 'hidden',
         height: '100vh',
       }}
     >
