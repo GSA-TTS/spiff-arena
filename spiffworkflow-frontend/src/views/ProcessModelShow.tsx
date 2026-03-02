@@ -351,18 +351,6 @@ export default function ProcessModelShow() {
                 <ListItemText>{t('edit_process_model')}</ListItemText>
               </MenuItem>
             </Can>
-            <MenuItem
-              data-testid="copy-process-model-menu-item"
-              onClick={() => {
-                setShowCopyModal(true);
-                handleActionsMenuClose();
-              }}
-            >
-              <ListItemIcon>
-                <ContentCopy fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>{t('copy_process_model')}</ListItemText>
-            </MenuItem>
             {!processModel.actions || processModel.actions.publish ? (
               <Can
                 I="POST"
@@ -405,6 +393,15 @@ export default function ProcessModelShow() {
           </Menu>
 
           {/* Keep frequently used actions outside menu */}
+          <SpiffTooltip title={t('copy_process_model')} placement="top">
+            <IconButton
+              data-testid="copy-process-model-button"
+              color="primary"
+              onClick={() => setShowCopyModal(true)}
+            >
+              <ContentCopy />
+            </IconButton>
+          </SpiffTooltip>
           <Can I="POST" a={targetUris.processModelTestsPath} ability={ability}>
             {hasTestCaseFiles ? (
               <ProcessModelTestRun titleText={t('run_bpmn_tests')} />

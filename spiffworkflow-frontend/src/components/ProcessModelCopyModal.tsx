@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -26,9 +26,34 @@ export default function ProcessModelCopyModal({
   handleCopyConfirm,
 }: ProcessModelCopyModalProps) {
   const { t } = useTranslation();
-  const [newId, setNewId] = useState<string>('');
-  const [newDisplayName, setNewDisplayName] = useState<string>('');
+
+  const getDefaultId = (): string => {
+    const lastSlashIndex = processModel.id.lastIndexOf('/');
+    if (lastSlashIndex === -1) {
+      return `${processModel.id}-copy`;
+    }
+    const group = processModel.id.substring(0, lastSlashIndex);
+    const slug = processModel.id.substring(lastSlashIndex + 1);
+    return `${group}/${slug}-copy`;
+  };
+
+  const getDefaultDisplayName = (): string => {
+    return `Copy of ${processModel.display_name}`;
+  };
+
+  const [newId, setNewId] = useState<string>(getDefaultId());
+  const [newDisplayName, setNewDisplayName] = useState<string>(
+    getDefaultDisplayName(),
+  );
   const [validationError, setValidationError] = useState<string>('');
+
+  useEffect(() => {
+    if (showCopyModal) {
+      setNewId(getDefaultId());
+      setNewDisplayName(getDefaultDisplayName());
+      setValidationError('');
+    }
+  }, [showCopyModal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const validateInputs = (): boolean => {
     if (!newId.trim()) {
@@ -52,19 +77,11 @@ export default function ProcessModelCopyModal({
   const handleConfirm = () => {
     if (validateInputs()) {
       handleCopyConfirm(newId.trim(), newDisplayName.trim() || undefined);
-      // Clear form
-      setNewId('');
-      setNewDisplayName('');
-      setValidationError('');
     }
   };
 
   const handleCancel = () => {
     handleCopyCancel();
-    // Clear form
-    setNewId('');
-    setNewDisplayName('');
-    setValidationError('');
   };
 
   return (
