@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
@@ -48,6 +48,7 @@ export default function ProcessInterstitial({
   const [inlineTaskData, setInlineTaskData] = useState<any>(null);
   const [formButtonsDisabled, setFormButtonsDisabled] = useState(false);
   const [sseGeneration, setSseGeneration] = useState(0);
+  const inlineTaskLoadingRef = useRef<string | null>(null);
 
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -175,7 +176,8 @@ export default function ProcessInterstitial({
     if (shouldRedirectToTask(lastTask)) {
       if (withConsole) {
         // Don't redirect — fetch full task data and render form inline
-        if (!activeHumanTask) {
+        if (!activeHumanTask && inlineTaskLoadingRef.current !== lastTask.id) {
+          inlineTaskLoadingRef.current = lastTask.id;
           loadTaskInline(lastTask.process_instance_id, lastTask.id);
         }
         return undefined;
@@ -421,6 +423,7 @@ export default function ProcessInterstitial({
         setLastTask(null);
         setData([]);
         setState('RUNNING');
+        inlineTaskLoadingRef.current = null;
         setSseGeneration((prev) => prev + 1);
       },
       failureCallback: (error: any) => {
