@@ -4019,6 +4019,420 @@ paths:
         "200":
           description: The requested data store.
 
+  /admin/groups:
+    parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+    get:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_list
+      summary: List all groups with member/pending counts
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Paginated list of groups
+    post:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_create
+      summary: Create a new group
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "201":
+          description: The created group
+
+  /admin/groups/{group_id}:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_show
+      summary: Get group detail with members and pending list
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Group detail
+    put:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_update
+      summary: Update group name/identifier
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Updated group
+    delete:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_delete
+      summary: Delete a group
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Group deleted
+
+  /admin/groups/{group_id}/members:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_add_members
+      summary: Add members to group by username/email
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Members added or pending
+
+  /admin/groups/{group_id}/members/csv:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_add_members_csv
+      summary: Bulk add members from CSV upload
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Members added or pending
+
+  /admin/groups/{group_id}/members/{user_id}:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    delete:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_remove_member
+      summary: Remove user from group
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Member removed
+
+  /admin/groups/{group_id}/pending/{waiting_id}:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: waiting_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    delete:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_remove_pending
+      summary: Remove pending assignment
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Pending assignment removed
+
+  /admin/groups/{group_id}/permissions:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      operationId: spiffworkflow_backend.routes.admin_permissions_controller.admin_group_permissions_list
+      summary: List permission assignments for group
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Permission assignments
+    post:
+      operationId: spiffworkflow_backend.routes.admin_permissions_controller.admin_group_permissions_create
+      summary: Add permission assignment to group
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "201":
+          description: Permission created
+
+  /admin/groups/{group_id}/permissions/{permission_id}:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: permission_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    delete:
+      operationId: spiffworkflow_backend.routes.admin_permissions_controller.admin_group_permissions_delete
+      summary: Remove permission assignment from group
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Permission removed
+
+  /admin/groups/{group_id}/role-preset:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      operationId: spiffworkflow_backend.routes.admin_permissions_controller.admin_group_apply_role_preset
+      summary: Apply role preset for a process group
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Role preset applied
+
+  /admin/process-groups-for-permissions:
+    get:
+      operationId: spiffworkflow_backend.routes.admin_permissions_controller.admin_process_group_list
+      summary: Simplified process group list for dropdown
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Process groups
+
+  /admin/process-instances/{pid}/tasks:
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      operationId: spiffworkflow_backend.routes.admin_tasks_controller.admin_pi_tasks
+      summary: List human tasks for a process instance
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Human tasks
+
+  /admin/tasks/{human_task_id}/reassign:
+    parameters:
+      - name: human_task_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      operationId: spiffworkflow_backend.routes.admin_tasks_controller.admin_task_reassign
+      summary: Replace potential owners for a human task
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Task reassigned
+
+  /admin/tasks/{human_task_id}/add-owners:
+    parameters:
+      - name: human_task_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      operationId: spiffworkflow_backend.routes.admin_tasks_controller.admin_task_add_owners
+      summary: Add potential owners to a human task
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Owners added
+
+  /admin/tasks/{human_task_id}/lane-reassign:
+    parameters:
+      - name: human_task_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      operationId: spiffworkflow_backend.routes.admin_tasks_controller.admin_task_lane_reassign
+      summary: Change lane group for a task
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Lane reassigned
+
+  /admin/process-instances/{pid}/lane-reassign:
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      operationId: spiffworkflow_backend.routes.admin_tasks_controller.admin_lane_reassign_bulk
+      summary: Change lane group for all tasks in a lane
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Lane reassigned for all matching tasks
+
+  /admin/groups/{group_id}/members/{user_id}/annotation:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_group_member_annotation_update
+      summary: Update annotation on group membership
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AwesomeUnspecifiedPayload"
+      responses:
+        "200":
+          description: Annotation updated
+
+  /admin/pending-assignments:
+    parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+    get:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_pending_list
+      summary: All pending assignments across groups
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Paginated pending assignments
+
+  /admin/groups/{group_id}/pending/reprocess:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      operationId: spiffworkflow_backend.routes.admin_groups_controller.admin_reprocess_pending
+      summary: Check if pending users now exist and apply
+      tags:
+        - Admin
+      responses:
+        "200":
+          description: Resolved pending assignments
+
 components:
   schemas:
     Pagination:

@@ -543,6 +543,7 @@ class TestAuthorizationService(BaseTest):
         return sorted(
             self._expected_basic_permissions()
             + [
+                ("/admin/*", "read"),
                 ("/can-run-privileged-script/*", "create"),
                 ("/data-stores/*", "read"),
                 ("/debug/*", "create"),
@@ -581,6 +582,9 @@ class TestAuthorizationService(BaseTest):
         return sorted(
             self._expected_support_permissions()
             + [
+                ("/admin/*", "create"),
+                ("/admin/*", "delete"),
+                ("/admin/*", "update"),
                 ("/authentication/configuration", "read"),
                 ("/authentication/configuration", "update"),
                 ("/authentication_begin/*", "read"),
