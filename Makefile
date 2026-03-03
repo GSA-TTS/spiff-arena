@@ -24,13 +24,16 @@ CONNECTOR_PROXY_AGGREGATE_DEV_OVERLAY ?= connector-proxies/aggregate/dev.docker-
 CONNECTOR_PROXY_ASYNC_HTTP_CONTAINER ?= connector-proxy-async-http
 CONNECTOR_PROXY_ASYNC_HTTP_DEV_OVERLAY ?= connector-proxies/async-http/dev.docker-compose.yml
 
+LOCAL_DEV_OVERLAY ?=
+
 YML_FILES := -f docker-compose.yml \
 	-f $(BACKEND_DEV_OVERLAY) \
 	-f $(FRONTEND_DEV_OVERLAY) \
 	-f $(CONNECTOR_PROXY_DEV_OVERLAY) \
 	-f $(CONNECTOR_PROXY_AGGREGATE_DEV_OVERLAY) \
 	-f $(CONNECTOR_PROXY_ASYNC_HTTP_DEV_OVERLAY) \
-	-f $(ARENA_DEV_OVERLAY)
+	-f $(ARENA_DEV_OVERLAY) \
+	$(if $(LOCAL_DEV_OVERLAY),-f $(LOCAL_DEV_OVERLAY))
 
 DOCKER_COMPOSE ?= RUN_AS=$(ME) docker compose $(YML_FILES)
 IN_ARENA ?= $(DOCKER_COMPOSE) run --rm $(ARENA_CONTAINER)
@@ -58,16 +61,24 @@ build-images:
 		--build-arg GROUP_NAME=$(GROUP_NAME) \
 		$(JUST)
 
-dev-env: stop-dev build-images uv-sync be-uv-sync be-db-clean fe-npm-i
+dev-env: stop-dev build-images uv-sync cp-poetry-i be-uv-sync be-db-clean fe-npm-i
 	@true
 
-# Local dev with the GSA-TTS connector built from ../spiffworkflow-connector
+# Local dev with PIC config and the GSA-TTS connector built from ../spiffworkflow-connector
+# Skips cp-poetry-i because the local connector uses uv, not poetry.
 dev-env-local:
-	$(MAKE) CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml dev-env
+	$(MAKE) LOCAL_DEV_OVERLAY=dev-local.docker-compose.yml CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml \
+		stop-dev build-images uv-sync be-uv-sync be-db-clean fe-npm-i
 
-# One-shot: setup + start with local connector
-local: dev-env-local
-	$(MAKE) CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml start-dev
+# Rebuild .venv on the host so pre-commit hooks resolve correctly.
+# The containerised uv-sync writes shebangs like #!/app/.venv/bin/python which
+# don't exist on the host.  Running uv sync natively fixes them.
+host-sync:
+	uv sync
+
+# One-shot: setup + start with local connector + fix host pre-commit hooks
+local: dev-env-local host-sync
+	$(MAKE) LOCAL_DEV_OVERLAY=dev-local.docker-compose.yml CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml start-dev
 
 start-dev: stop-dev
 	$(DOCKER_COMPOSE) up -d
@@ -122,6 +133,12 @@ co-wheel:
 
 cp-sh:
 	$(IN_CONNECTOR_PROXY) /bin/bash
+
+cp-poetry-i:
+	$(IN_CONNECTOR_PROXY) poetry install
+
+cp-poetry-lock:
+	$(IN_CONNECTOR_PROXY) poetry lock --no-update
 
 cp-logs:
 	docker logs -f $(CONNECTOR_PROXY_CONTAINER)
@@ -184,12 +201,12 @@ sh:
 take-ownership:
 	$(SUDO) chown -R $(ME) .
 
-.PHONY: build-images dev-env dev-env-local local \
+.PHONY: build-images dev-env dev-env-local host-sync local \
 	start-dev stop-dev \
 	be-clear-log-file be-logs be-mypy be-uv-sync be-venv-rm \
 	be-db-clean be-db-migrate be-sh be-sqlite be-tests be-tests-par \
 	co-tests co-wheel \
-	cp-logs cp-sh \
+	cp-logs cp-poetry-i cp-poetry-lock cp-sh \
 	cpagg-logs cpagg-sh \
 	cpah-logs cpah-sh \
 	fe-lint-fix fe-logs fe-npm-clean fe-npm-i fe-npm-rm fe-sh fe-unimported  \

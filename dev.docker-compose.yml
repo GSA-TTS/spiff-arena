@@ -1,18 +1,6 @@
 
 services:
-  match-venv-ownership:
-    image: alpine
-    restart: "no"
-    entrypoint: |
-      /bin/sh -c "chown -R ${RUN_AS:-0:0} /venvs/arena /venvs/backend"
-    volumes:
-      - arena-venv:/venvs/arena:rw
-      - backend-venv:/venvs/backend:rw
-
   spiff-arena:
-    depends_on:
-      match-venv-ownership:
-        condition: service_completed_successfully
     build:
       context: .
       dockerfile: dev.Dockerfile
@@ -22,9 +10,4 @@ services:
       XDG_CACHE_HOME: "/app/.cache"
     volumes:
       - ./:/app
-      - arena-venv:/app/.venv
       - ${MY_SSH_DIR:-/tmp/__spiff_nossh}:${MY_SSH_DIR:-/tmp/__spiff_nossh}
-
-volumes:
-  arena-venv:
-  backend-venv:

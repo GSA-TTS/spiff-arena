@@ -1,0 +1,88 @@
+
+services:
+  # Venv volumes are owned by root after image builds; fix ownership so the
+  # RUN_AS user can write to them.
+  match-venv-ownership:
+    image: alpine
+    restart: "no"
+    entrypoint: |
+      /bin/sh -c "chown -R ${RUN_AS:-0:0} /venvs/arena /venvs/backend"
+    volumes:
+      - arena-venv:/venvs/arena:rw
+      - backend-venv:/venvs/backend:rw
+
+  spiff-arena:
+    depends_on:
+      match-venv-ownership:
+        condition: service_completed_successfully
+    volumes:
+      - arena-venv:/app/.venv
+
+  spiffworkflow-backend:
+    depends_on:
+      match-venv-ownership:
+        condition: service_completed_successfully
+    environment:
+      SPIFFWORKFLOW_BACKEND_DEFAULT_USER_GROUP: everybody
+      SPIFFWORKFLOW_BACKEND_PERMISSIONS_FILE_NAME: pic_test.yml
+      SPIFFWORKFLOW_BACKEND_EXTENSIONS_API_ENABLED: "true"
+      SPIFFWORKFLOW_BACKEND_BOOTSTRAP_PROCESS_MODEL: "PIC/agency-specific-processes/dev-setup"
+      SPIFFWORKFLOW_BACKEND_BOOTSTRAP_USERNAME: "adminX@bootstrap"
+    volumes:
+      - backend-venv:/app/.venv
+
+  spiffworkflow-connector:
+    image: ghcr.io/gsa-tts/spiffworkflow-connector:latest
+    platform: linux/amd64
+    user: ${RUN_AS:-0:0}
+    depends_on:
+      createbuckets:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CONNECTOR_PROXY_PORT: ${SPIFF_CONNECTOR_PORT:-8004}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:9001
+      S3_BUCKET: testbucket
+      S3_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      SIGNED_LINK_EXPIRATION: 3600
+
+  minio:
+    container_name: "minio"
+    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    command: server /tmp/minio --console-address ":9002"
+    ports:
+      - "9001:9000" # S3 API
+      - "9002:9002" # Minio Console
+    volumes:
+      - minio-vol:/tmp/minio
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  createbuckets:
+    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc alias set dockerminio http://minio:9000 minioadmin minioadmin; do
+        echo 'Waiting for minio to be ready...';
+        sleep 2;
+      done;
+      /usr/bin/mc mb dockerminio/testbucket || /usr/bin/mc ls dockerminio/testbucket;
+      "
+
+volumes:
+  arena-venv:
+  backend-venv:
+  minio-vol:
+    driver: local

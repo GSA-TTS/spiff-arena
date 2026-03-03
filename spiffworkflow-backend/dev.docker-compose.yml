@@ -1,9 +1,6 @@
 
 services:
   spiffworkflow-backend:
-    depends_on:
-      match-venv-ownership:
-        condition: service_completed_successfully
     build:
       context: spiffworkflow-backend
       dockerfile: dev.Dockerfile
@@ -21,4 +18,3 @@ services:
         required: false
     volumes:
       - ./spiffworkflow-backend:/app
-      - backend-venv:/app/.venv
