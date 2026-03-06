@@ -24,13 +24,16 @@ CONNECTOR_PROXY_AGGREGATE_DEV_OVERLAY ?= connector-proxies/aggregate/dev.docker-
 CONNECTOR_PROXY_ASYNC_HTTP_CONTAINER ?= connector-proxy-async-http
 CONNECTOR_PROXY_ASYNC_HTTP_DEV_OVERLAY ?= connector-proxies/async-http/dev.docker-compose.yml
 
+LOCAL_DEV_OVERLAY ?=
+
 YML_FILES := -f docker-compose.yml \
 	-f $(BACKEND_DEV_OVERLAY) \
 	-f $(FRONTEND_DEV_OVERLAY) \
 	-f $(CONNECTOR_PROXY_DEV_OVERLAY) \
 	-f $(CONNECTOR_PROXY_AGGREGATE_DEV_OVERLAY) \
 	-f $(CONNECTOR_PROXY_ASYNC_HTTP_DEV_OVERLAY) \
-	-f $(ARENA_DEV_OVERLAY)
+	-f $(ARENA_DEV_OVERLAY) \
+	$(if $(LOCAL_DEV_OVERLAY),-f $(LOCAL_DEV_OVERLAY))
 
 DOCKER_COMPOSE ?= RUN_AS=$(ME) docker compose $(YML_FILES)
 IN_ARENA ?= $(DOCKER_COMPOSE) run --rm $(ARENA_CONTAINER)
@@ -60,6 +63,21 @@ build-images:
 
 dev-env: stop-dev build-images uv-sync cp-poetry-i be-uv-sync be-db-clean fe-npm-i
 	@true
+
+# Local dev with PIC config and the GSA-TTS connector built from ../spiffworkflow-connector
+# Skips cp-poetry-i because the local connector uses uv, not poetry.
+dev-env-local:
+	$(MAKE) LOCAL_DEV_OVERLAY=dev-local.docker-compose.yml CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml \
+		stop-dev build-images uv-sync be-uv-sync be-db-clean fe-npm-i
+
+# Rebuild host .venv directories so pre-commit hooks and IDE (Pylance) work.
+host-sync:
+	uv sync
+	cd spiffworkflow-backend && uv sync
+
+# One-shot: setup + start with local connector + fix host pre-commit hooks
+local: dev-env-local
+	$(MAKE) LOCAL_DEV_OVERLAY=dev-local.docker-compose.yml CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml start-dev
 
 start-dev: stop-dev
 	$(DOCKER_COMPOSE) up -d
@@ -182,7 +200,7 @@ sh:
 take-ownership:
 	$(SUDO) chown -R $(ME) .
 
-.PHONY: build-images dev-env \
+.PHONY: build-images dev-env dev-env-local host-sync local \
 	start-dev stop-dev \
 	be-clear-log-file be-logs be-mypy be-uv-sync be-venv-rm \
 	be-db-clean be-db-migrate be-sh be-sqlite be-tests be-tests-par \
