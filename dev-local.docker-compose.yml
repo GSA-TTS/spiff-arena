@@ -28,6 +28,7 @@ services:
       SPIFFWORKFLOW_BACKEND_EXTENSIONS_API_ENABLED: "true"
       SPIFFWORKFLOW_BACKEND_BOOTSTRAP_PROCESS_MODEL: "PIC/agency-specific-processes/dev-setup"
       SPIFFWORKFLOW_BACKEND_BOOTSTRAP_USERNAME: "adminX@bootstrap"
+      SPIFFWORKFLOW_BACKEND_GIT_COMMIT_ON_SAVE: false
     volumes:
       - backend-venv:/app/.venv
 

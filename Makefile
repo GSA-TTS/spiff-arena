@@ -70,14 +70,13 @@ dev-env-local:
 	$(MAKE) LOCAL_DEV_OVERLAY=dev-local.docker-compose.yml CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml \
 		stop-dev build-images uv-sync be-uv-sync be-db-clean fe-npm-i
 
-# Rebuild .venv on the host so pre-commit hooks resolve correctly.
-# The containerised uv-sync writes shebangs like #!/app/.venv/bin/python which
-# don't exist on the host.  Running uv sync natively fixes them.
+# Rebuild host .venv directories so pre-commit hooks and IDE (Pylance) work.
 host-sync:
 	uv sync
+	cd spiffworkflow-backend && uv sync
 
 # One-shot: setup + start with local connector + fix host pre-commit hooks
-local: dev-env-local host-sync
+local: dev-env-local
 	$(MAKE) LOCAL_DEV_OVERLAY=dev-local.docker-compose.yml CONNECTOR_PROXY_DEV_OVERLAY=connector-proxy-demo/dev-local.docker-compose.yml start-dev
 
 start-dev: stop-dev
