@@ -11,12 +11,36 @@ jobs:
     steps:
       - name: Notify on Tests failure
         if: ${{ github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.conclusion != 'skipped' }}
+        env:
+          WORKFLOW_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow.name }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          payload=$(jq -n \
+            --arg url "$WORKFLOW_RUN_URL" \
+            --arg workflow "$WORKFLOW_NAME" \
+            --arg conclusion "$WORKFLOW_CONCLUSION" \
+            --arg branch "$WORKFLOW_HEAD_BRANCH" \
+            '{text: ("spiff-arena <" + $url + "|" + $workflow + ">: " + $conclusion + " - branch " + $branch)}')
           curl -X POST -H 'Content-type: application/json' \
-            --data '{"text":"spiff-arena <${{ github.event.workflow_run.html_url }}|${{ github.event.workflow.name }}>: ${{github.event.workflow_run.conclusion}} - branch ${{github.event.workflow_run.head_branch}}"}' \
-          ${{ secrets.SLACK_WEBHOOK_URL }}
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"
       - name: Notify on Tests success
+        env:
+          WORKFLOW_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow.name }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          payload=$(jq -n \
+            --arg url "$WORKFLOW_RUN_URL" \
+            --arg workflow "$WORKFLOW_NAME" \
+            --arg conclusion "$WORKFLOW_CONCLUSION" \
+            --arg branch "$WORKFLOW_HEAD_BRANCH" \
+            '{text: ("spiff-arena <" + $url + "|" + $workflow + ">: " + $conclusion + " - branch " + $branch)}')
           curl -X POST -H 'Content-type: application/json' \
-            --data '{"text":"spiff-arena <${{ github.event.workflow_run.html_url }}|${{ github.event.workflow.name }}>: ${{github.event.workflow_run.conclusion}} - branch ${{github.event.workflow_run.head_branch}}"}' \
-          ${{ secrets.SLACK_WEBHOOK_URL }}          
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"
