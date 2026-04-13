@@ -15,3 +15,8 @@ jobs:
           curl -X POST -H 'Content-type: application/json' \
             --data '{"text":"spiff-arena <${{ github.event.workflow_run.html_url }}|${{ github.event.workflow.name }}>: ${{github.event.workflow_run.conclusion}} - branch ${{github.event.workflow_run.head_branch}}"}' \
           ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Notify on Tests success
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"spiff-arena <${{ github.event.workflow_run.html_url }}|${{ github.event.workflow.name }}>: ${{github.event.workflow_run.conclusion}} - branch ${{github.event.workflow_run.head_branch}}"}' \
+          ${{ secrets.SLACK_WEBHOOK_URL }}          
