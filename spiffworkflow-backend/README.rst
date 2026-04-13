@@ -15,8 +15,6 @@ Spiffworkflow Backend
    :target: https://github.com/psf/black
    :alt: Black
 
-
-
 Features
 --------
 

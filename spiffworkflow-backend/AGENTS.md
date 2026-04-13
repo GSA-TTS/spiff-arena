@@ -41,7 +41,6 @@ Setting up the development environment requires several manual steps. A fully au
    ```
 
 3. **Set up Databases:**
-
    - For local development, you need a running MySQL server. Then, run the following command to create and migrate the database:
 
      ```bash
