@@ -38,12 +38,12 @@ else:
 
 
 import jwt
-from jwt.types import Options
 import requests
 from flask import current_app
 from flask import g
 from flask import redirect
 from flask import request
+from jwt.types import Options
 from werkzeug.wrappers import Response
 
 from spiffworkflow_backend.config import HTTP_REQUEST_TIMEOUT_SECONDS
