@@ -1254,7 +1254,8 @@ class TestProcessInstanceProcessor(BaseTest):
         assert summary is None
         processor.do_engine_steps(save=True, execution_strategy_name="run_current_ready_tasks")
         summary = process_instance.summary
-        assert summary is None
+        assert summary is not None
+        assert summary == "WE SUMMARIZE"
         processor.do_engine_steps(save=True, execution_strategy_name="greedy")
         summary = process_instance.summary
         assert summary is not None
