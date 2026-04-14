@@ -38,6 +38,7 @@ else:
 
 
 import jwt
+from jwt.types import Options
 import requests
 from flask import current_app
 from flask import g
@@ -307,51 +308,54 @@ class AuthenticationService:
             x509_cert = load_der_x509_certificate(decoded_certificate, default_backend())
             return x509_cert.public_key()
 
-    @classmethod
-    def parse_jwt_token(cls, authentication_identifier: str, token: str) -> dict:
-        header = jwt.get_unverified_header(token)
-        key_id = str(header.get("kid"))
-        parsed_token: dict | None = None
+@classmethod
+def parse_jwt_token(cls, authentication_identifier: str, token: str) -> dict:
+    header = jwt.get_unverified_header(token)
+    key_id = str(header.get("kid"))
+    parsed_token: dict | None = None
 
-        # if the token has our key id then we issued it and should verify to ensure it's valid
-        if key_id == SPIFF_GENERATED_JWT_KEY_ID:
-            parsed_token = jwt.decode(
-                token,
-                str(current_app.secret_key),
-                algorithms=[SPIFF_GENERATED_JWT_ALGORITHM],
-                audience=SPIFF_GENERATED_JWT_AUDIENCE,
-                options={"verify_exp": False},
-            )
+    # if the token has our key id then we issued it and should verify to ensure it's valid
+    if key_id == SPIFF_GENERATED_JWT_KEY_ID:
+        parsed_token = jwt.decode(
+            token,
+            str(current_app.secret_key),
+            algorithms=[SPIFF_GENERATED_JWT_ALGORITHM],
+            audience=SPIFF_GENERATED_JWT_AUDIENCE,
+            options={"verify_exp": False},
+        )
+    else:
+        algorithm = str(header.get("alg"))
+        json_key_configs = cls.jwks_public_key_for_key_id(authentication_identifier, key_id)
+        public_key: Any = None
+
+        jwt_decode_options: Options = {
+            "verify_exp": False,
+            "verify_aud": False,
+            "verify_iat": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_VERIFY_IAT"],
+            "verify_nbf": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_VERIFY_NBF"],
+        }
+
+        leeway = current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_LEEWAY"]
+
+        if "x5c" not in json_key_configs:
+            public_key = cls.public_key_from_rsa_public_numbers(json_key_configs)
         else:
-            algorithm = str(header.get("alg"))
-            json_key_configs = cls.jwks_public_key_for_key_id(authentication_identifier, key_id)
-            public_key: Any = None
-            jwt_decode_options = {
-                "verify_exp": False,
-                "verify_aud": False,
-                "verify_iat": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_VERIFY_IAT"],
-                "verify_nbf": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_VERIFY_NBF"],
-                "leeway": current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_LEEWAY"],
-            }
+            public_key = cls.public_key_from_x5c(key_id, json_key_configs)
 
-            if "x5c" not in json_key_configs:
-                public_key = cls.public_key_from_rsa_public_numbers(json_key_configs)
-            else:
-                public_key = cls.public_key_from_x5c(key_id, json_key_configs)
+        # tokens generated from the cli have an aud like: [ "realm-management", "account" ]
+        # while tokens generated from frontend have an aud like: "spiffworkflow-backend."
+        # as such, we cannot simply pull the first valid audience out of cls.valid_audiences(authentication_identifier)
+        # and then shove it into decode (it will raise), but we need the algorithm from validate_decoded_token that checks
+        # if the audience in the token matches any of the valid audience values. Therefore do not check aud here.
+        parsed_token = jwt.decode(
+            token,
+            public_key,
+            algorithms=[algorithm],
+            options=jwt_decode_options,
+            leeway=leeway,
+        )
 
-            # tokens generated from the cli have an aud like: [ "realm-management", "account" ]
-            # while tokens generated from frontend have an aud like: "spiffworkflow-backend."
-            # as such, we cannot simply pull the first valid audience out of cls.valid_audiences(authentication_identifier)
-            # and then shove it into decode (it will raise), but we need the algorithm from validate_decoded_token that checks
-            # if the audience in the token matches any of the valid audience values. Therefore do not check aud here.
-            parsed_token = jwt.decode(
-                token,
-                public_key,
-                algorithms=[algorithm],
-                audience=cls.valid_audiences(authentication_identifier)[0],
-                options=jwt_decode_options,
-            )
-        return cast(dict, parsed_token)
+    return cast(dict, parsed_token)
 
     # returns either https://spiffworkflow.example.com or https://spiffworkflow.example.com/api
     @staticmethod
