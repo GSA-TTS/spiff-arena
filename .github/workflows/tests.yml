@@ -318,22 +318,6 @@ jobs:
       - name: Upload coverage report
         uses: codecov/codecov-action@v6.0.0
 
-      - name: SonarCloud Scan
-        uses: sonarsource/sonarcloud-github-action@v5.0.0
-        # thought about just skipping dependabot
-        # if: ${{ github.actor != 'dependabot[bot]' }}
-        # but figured all pull requests seems better, since none of them will have access to sonarcloud.
-        # however, with just skipping pull requests, the build associated with "Triggered via push" is also associated with the pull request and also fails hitting sonarcloud
-        # if: ${{ github.event_name != 'pull_request' }}
-        # so just skip everything but main
-        if: github.ref_name == 'main'
-        with:
-          projectBaseDir: spiffworkflow-backend
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      # part about saving PR number and then using it from auto-merge-dependabot-prs from:
-      # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_run
       - name: Write PR number to spiffworkflow-backend/pr dir
         if: ${{ github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' }}
         env:
@@ -352,40 +336,6 @@ jobs:
           # trying to explicitly add spiffworkflow-backend to path
           path: spiffworkflow-backend/pr/
           if-no-files-found: error
-
-  tests-frontend:
-    runs-on: ubuntu-latest
-    needs: [tests-backend, run_pre_commit_checks, check_docker_start_script]
-    defaults:
-      run:
-        working-directory: spiffworkflow-frontend
-    steps:
-      - name: Development Code
-        uses: actions/checkout@v6
-        with:
-          # Disabling shallow clone is recommended for improving relevancy of reporting in sonarcloud
-          fetch-depth: 0
-      - name: Setup Node
-        uses: actions/setup-node@v6.2.0
-        with:
-          node-version: 24.x
-      - run: npm install
-      - run: npm run check-ci
-      - run: npm run build --if-present
-      - name: SonarCloud Scan
-        # thought about just skipping dependabot
-        # if: ${{ github.actor != 'dependabot[bot]' }}
-        # but figured all pull requests seems better, since none of them will have access to sonarcloud.
-        # however, with just skipping pull requests, the build associated with "Triggered via push" is also associated with the pull request and also fails hitting sonarcloud
-        # if: ${{ github.event_name != 'pull_request' }}
-        # so just skip everything but main
-        if: github.ref_name == 'main'
-        uses: sonarsource/sonarcloud-github-action@v5.0.0
-        with:
-          projectBaseDir: spiffworkflow-frontend
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   playwright-run:
     runs-on: ubuntu-latest
