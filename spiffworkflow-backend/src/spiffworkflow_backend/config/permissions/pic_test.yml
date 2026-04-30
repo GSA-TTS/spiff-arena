@@ -29,45 +29,29 @@ users:
     email: admin@example.com
     password: admin
     preferred_username: admin
+  unauthorized:
+    service: local_open_id
+    email: unauthorized@example.com
+    password: unauthorized
+    preferred_username: unauthorized
   adminX:
     service: bootstrap
 
 groups:
   admin:
-    users: [ admin@example.com, adminX@bootstrap ]
+    users: [admin@example.com, adminX@bootstrap]
   blm-moab:
-    users: [ specialist@example.com ]
+    users: [specialist@example.com]
   blm-moab-ao:
-    users: [ approver@example.com ]
+    users: [approver@example.com]
   blm-moab-nepa-coord:
-    users: [ reviewer@example.com ]
+    users: [reviewer@example.com]
   blm-moab-supervisors:
-    users: [ supervisor@example.com ]
+    users: [supervisor@example.com]
 
 permissions:
   # Admins have access to everything.
   admin:
-    groups: [ admin ]
-    actions: [ all ]
+    groups: [admin]
+    actions: [all]
     uri: /*
-
-  # Everybody can participate in tasks assigned to them.
-  # BASIC, PG, PM, are documented at https://spiff-arena.readthedocs.io/en/latest/DevOps_installation_integration/permission_url.html
-  basic:
-    groups: [ everybody ]
-    actions: [ all ]
-    uri: BASIC
-
-  # Everyone can see everything (all groups, and processes are visible)
-  read-all-process-groups:
-    groups: [ everybody ]
-    actions: [ read ]
-    uri: PG:ALL
-  read-all-process-models:
-    groups: [ everybody ]
-    actions: [ read ]
-    uri: PM:ALL
-  run-all-process-models:
-    groups: [ everybody ]
-    actions: [ start ]
-    uri: PM:ALL
