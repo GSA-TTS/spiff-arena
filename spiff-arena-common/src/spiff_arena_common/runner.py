@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from types import ModuleType
 
 import jsonschema
 
@@ -39,6 +40,7 @@ def spiff_json_object_hook(dct):
 from spiff_arena_common.data_stores import JSONFileDataStore
 
 from SpiffWorkflow.bpmn.exceptions import WorkflowTaskException
+from SpiffWorkflow.bpmn.serializer import DefaultRegistry
 from SpiffWorkflow.bpmn.specs.mixins.multiinstance_task import LoopTask
 from SpiffWorkflow.bpmn.parser.util import full_tag
 from SpiffWorkflow.bpmn.script_engine import PythonScriptEngine, TaskDataEnvironment
@@ -53,6 +55,8 @@ from SpiffWorkflow.spiff.specs.defaults import CallActivity, ManualTask, NoneTas
 from SpiffWorkflow.util.task import TaskFilter, TaskState
 
 logging.basicConfig(level=logging.ERROR)
+
+_INTERNAL_KEYS = {"__builtins__", "__annotations__"}
 
 class CustomManualTask(ManualTask):
     def _run(self, task):
@@ -168,6 +172,12 @@ class CustomEnvironment(TaskDataEnvironment):
             "group_member_2@example.com",
             "group_member_3@example.com"
         ]
+        hidden_keys = _INTERNAL_KEYS | set(self.globals.keys()) | set(external_context.keys())
+        external_context["get_current_task_data"] = lambda: {
+            k: v
+            for k, v in DefaultRegistry().convert(context).items()
+            if k not in hidden_keys and not callable(v) and not isinstance(v, ModuleType)
+        }
 
         return super().execute(script or "", context, external_context)
 
@@ -207,6 +217,17 @@ _workflow_cache = {}
 # This allows jumping to any step without sending state back from JavaScript
 _step_history_cache = {}
 
+
+def _missing_process_error(parser):
+    process_ids = list(parser.process_parsers.keys())
+    if process_ids:
+        joined = ", ".join(process_ids)
+        return (
+            "No executable BPMN process definitions were found in the XML. "
+            f"Found non-executable processes: {joined}."
+        )
+    return "No BPMN process definitions were found in the XML."
+
 def specs_from_xml(files):
     parser = CustomParser()
 
@@ -220,8 +241,12 @@ def specs_from_xml(files):
         all_specs = parser.find_all_specs()
     except Exception as e:
         return None, f"{e.__class__.__name__}: {e}"
-    
-    process_id = parser.get_process_ids()[0]
+
+    process_ids = parser.get_process_ids()
+    if not process_ids:
+        return None, _missing_process_error(parser)
+
+    process_id = process_ids[0]
     process = all_specs.pop(process_id)
     subprocesses = all_specs
 
@@ -375,12 +400,10 @@ def _advance_workflow(workflow, task, strategy_name, compress_response=False, se
             if any(spec not in workflow.subprocess_specs for spec in lazy_loads_list):
                 break
 
-        # Optimization: try searching from completed task first (fast path),
-        # only refresh waiting tasks if fast path fails (deferred refresh)
+        # Optimization: try searching from completed task first (fast path)
         completed_task = task
         task = next_task(workflow, TaskState.READY, completed_task)
         if not task:
-            workflow.refresh_waiting_tasks()
             task = next_task(workflow, TaskState.READY)
         if not task:
             break
@@ -419,7 +442,7 @@ def _advance_workflow(workflow, task, strategy_name, compress_response=False, se
                         break
 
                     expected = stack[index]
-                    if task.task_spec.name != expected["id"]:
+                    if task.task_spec.bpmn_id != expected["id"]:
                         break
 
                     task.run()
@@ -431,7 +454,7 @@ def _advance_workflow(workflow, task, strategy_name, compress_response=False, se
                     if not stack:
                         break
                     expected = stack.pop()
-                    if task.task_spec.name != expected["id"]:
+                    if task.task_spec.bpmn_id != expected["id"]:
                         break
                     task.run()
                     task.data.update(expected["data"])
