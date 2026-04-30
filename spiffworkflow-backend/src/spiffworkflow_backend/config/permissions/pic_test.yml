@@ -29,6 +29,11 @@ users:
     email: admin@example.com
     password: admin
     preferred_username: admin
+  unauthorized:
+    service: local_open_id
+    email: unauthorized@example.com
+    password: unauthorized
+    preferred_username: unauthorized
   adminX:
     service: bootstrap
 
