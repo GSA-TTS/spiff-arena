@@ -1,18 +1,53 @@
-# Only put bootstrap users in here
-# Other users should be defined via DMN or IDP groups
-
 users:
+  approver:
+    service: local_open_id
+    email: approver@example.com
+    password: approver
+    preferred_username: approver
+  specialist:
+    service: local_open_id
+    email: specialist@example.com
+    password: specialist
+    preferred_username: specialist
+  reviewer:
+    service: local_open_id
+    email: reviewer@example.com
+    password: reviewer
+    preferred_username: reviewer
+  supervisor:
+    service: local_open_id
+    email: supervisor@example.com
+    password: supervisor
+    preferred_username: supervisor
+  analyst:
+    service: local_open_id
+    email: analyst@example.com
+    password: analyst
+    preferred_username: analyst
   admin:
     service: local_open_id
     email: admin@example.com
     password: admin
     preferred_username: admin
+  unauthorized:
+    service: local_open_id
+    email: unauthorized@example.com
+    password: unauthorized
+    preferred_username: unauthorized
   adminX:
     service: bootstrap
 
 groups:
   admin:
     users: [admin@example.com, adminX@bootstrap]
+  blm-moab:
+    users: [specialist@example.com]
+  blm-moab-ao:
+    users: [approver@example.com]
+  blm-moab-nepa-coord:
+    users: [reviewer@example.com]
+  blm-moab-supervisors:
+    users: [supervisor@example.com]
 
 permissions:
   # Admins have access to everything.
