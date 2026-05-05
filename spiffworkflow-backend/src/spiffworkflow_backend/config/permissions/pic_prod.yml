@@ -1,0 +1,14 @@
+users:
+  adminX:
+    service: bootstrap
+
+groups:
+  admin:
+    users: [adminX@bootstrap]
+
+permissions:
+  # Admins have access to everything.
+  admin:
+    groups: [admin]
+    actions: [all]
+    uri: /*
