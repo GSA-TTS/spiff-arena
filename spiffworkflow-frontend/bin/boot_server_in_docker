@@ -51,6 +51,15 @@ port_to_use="${PORT0:-80}"
 if [[ -n "${SPIFFWORKFLOW_FRONTEND_INTERNAL_PORT:-}" ]]; then
   port_to_use="$SPIFFWORKFLOW_FRONTEND_INTERNAL_PORT"
 fi
-sed "s/{{SPIFFWORKFLOW_FRONTEND_INTERNAL_PORT}}/${port_to_use}/g" /var/tmp/nginx.conf.template >/etc/nginx/conf.d/default.conf
+
+hsts_header=""
+if [[ "${SPIFFWORKFLOW_FRONTEND_ENABLE_HSTS:-false}" == "true" ]]; then
+  hsts_header='add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;'
+fi
+
+sed \
+  -e "s/{{SPIFFWORKFLOW_FRONTEND_INTERNAL_PORT}}/${port_to_use}/g" \
+  -e "s|{{SPIFFWORKFLOW_FRONTEND_HSTS_HEADER}}|${hsts_header}|g" \
+  /var/tmp/nginx.conf.template >/etc/nginx/conf.d/default.conf
 
 exec nginx -g "daemon off;"
