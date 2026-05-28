@@ -31,7 +31,6 @@ on:
   push:
     branches:
       - main
-      - tts-main
       - bpmn-js-spiffworkflow-react
       - debt/performance
     tags: [v*]
