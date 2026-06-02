@@ -129,6 +129,6 @@
     "prettier": "^3.8.3",
     "sass-embedded": "^1.99.0",
     "typescript-eslint": "^8.59.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.6"
   }
 }
