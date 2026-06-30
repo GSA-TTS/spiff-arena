@@ -60,8 +60,9 @@ if [[ -n "$database_password" ]]; then
   database_host_args="${database_host_args} -p${database_password}"
 fi
 
-# uncomment this line to fix branching conflicts
-# uv run flask db merge heads -m "merging heads"
+# To fix "Multiple head revisions are present" branching conflicts, run:
+#   ./bin/merge_migration_heads "merging heads"
+# (creates a new merge migration without touching existing, already-stamped ones)
 
 function run_command_on_mysql_databases {
   local command="$1"
