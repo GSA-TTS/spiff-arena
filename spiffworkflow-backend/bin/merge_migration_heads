@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# Resolves Alembic "Multiple head revisions are present" errors that show up
+# after pulling in upstream migrations during a Sartography rebase.
+#
+# It creates a NEW no-op merge migration on top of the current heads. It does
+# NOT modify or delete any existing migration files. This is important: older
+# merge revisions (e.g. ones created during a previous rebase) may already be
+# stamped in production's alembic_version table, so removing or rewriting them
+# would break `flask db upgrade` in production. Always layer a new merge on top.
+#
+# Usage:
+#   ./bin/merge_migration_heads ["commit message"]
+#
+# Honors the same env vars as bin/recreate_db and falls back to sensible
+# defaults (sqlite + the neighboring sample-process-models checkout).
+
+function error_handler() {
+  echo >&2 "Exited with BAD EXIT CODE '${2}' in ${0} script at line: ${1}."
+  exit "$2"
+}
+trap 'error_handler ${LINENO} $?' ERR
+set -o errtrace -o errexit -o nounset -o pipefail
+
+script_dir="$(
+  cd -- "$(dirname "$0")" >/dev/null 2>&1
+  pwd -P
+)"
+cd "${script_dir}/.."
+
+export FLASK_SESSION_SECRET_KEY="${FLASK_SESSION_SECRET_KEY:-this_is_merge_heads_secret_key}"
+export SPIFFWORKFLOW_BACKEND_ENV="${SPIFFWORKFLOW_BACKEND_ENV:-local_development}"
+export SPIFFWORKFLOW_BACKEND_DATABASE_TYPE="${SPIFFWORKFLOW_BACKEND_DATABASE_TYPE:-sqlite}"
+
+# Locate the sample-process-models checkout (required for the app to boot).
+if [[ -z "${SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR:-}" ]]; then
+  SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR="${script_dir}/../../../sample-process-models"
+  if [[ ! -d "$SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR" ]]; then
+    SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR="${script_dir}/../../sample-process-models"
+    if [[ ! -d "$SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR" ]]; then
+      echo >&2 "ERROR: Could not find a sample-process-models checkout next to spiff-arena."
+      exit 1
+    fi
+  fi
+  export SPIFFWORKFLOW_BACKEND_BPMN_SPEC_ABSOLUTE_DIR
+fi
+
+commit_message="${1:-merging heads}"
+
+echo "Current migration heads:"
+uv run flask db heads
+
+num_heads="$(uv run flask db heads 2>/dev/null | grep -c . || true)"
+if [[ "${num_heads}" -le 1 ]]; then
+  echo "Only one head present; nothing to merge."
+  exit 0
+fi
+
+echo
+echo "Creating merge migration: ${commit_message}"
+uv run flask db merge heads -m "${commit_message}"
+
+echo
+echo "Heads after merge:"
+uv run flask db heads
+
+echo
+echo "Done. Review the generated migration in migrations/versions/, then re-run:"
+echo "  SPIFFWORKFLOW_BACKEND_DATABASE_TYPE=sqlite ./bin/recreate_db clean"
