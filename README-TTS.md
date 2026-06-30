@@ -45,4 +45,4 @@
       ```
 
 1. commit changes
-1. make a PR that _rebases_ this branch onto `origin/tts-main`
+1. make a PR that _rebases_ this branch onto `origin/main`
