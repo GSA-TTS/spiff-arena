@@ -1,0 +1,78 @@
+# Snyk (https://snyk.io) policy file, patches or ignores known vulnerabilities.
+version: v1.25.1
+# ignores vulnerabilities until expiry date; change duration by modifying expiry date
+ignore:
+  snyk:lic:npm:lightningcss:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-win32-x64-msvc:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-win32-arm64-msvc:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-linux-x64-musl:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-linux-x64-gnu:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-linux-arm64-musl:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-linux-arm64-gnu:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-linux-arm-gnueabihf:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-freebsd-x64:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-darwin-x64:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-darwin-arm64:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+  snyk:lic:npm:lightningcss-android-arm64:MPL-2.0:
+  - '*':
+      reason: >-
+        License is copyleft and all changes to lightning css must remain opensource
+      expires: 2027-01-01T00:00:00.000Z
+      created: 2026-06-30T16:19:17.825Z
+
+patch: {}

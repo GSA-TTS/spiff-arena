@@ -51,6 +51,10 @@ RUN apk add --no-cache bash
 # Upgrade all packages to fix security vulnerabilities
 RUN apk update && apk upgrade
 
+# to fix security vulnerability:
+# remove this line once the base image has the secure version of this lib (10.46)
+RUN apk add --upgrade pcre2
+
 # to fix CVE-2026-22184 security vulnerability:
 # remove this line once the base image has zlib 1.3.2-r0 or higher
 RUN apk add --upgrade zlib

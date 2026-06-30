@@ -3,6 +3,8 @@ import json
 import logging
 from json import JSONDecodeError
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
 
 import requests
 import sentry_sdk
@@ -110,30 +112,63 @@ def _redact_sensitive_headers(headers: dict[str, Any] | None) -> dict[str, Any] 
     return redacted_headers
 
 
-def _log_connector_proxy_request(operator_identifier: str, method: str, url: str, headers: dict[str, Any], body: Any) -> None:
+def _redact_proxy_url(proxy_url: str) -> str:
+    parsed_url = urlsplit(proxy_url)
+    if parsed_url.username is None and parsed_url.password is None:
+        return proxy_url
+
+    host = parsed_url.hostname or ""
+    if parsed_url.port is not None:
+        host = f"{host}:{parsed_url.port}"
+    return urlunsplit((parsed_url.scheme, f"<redacted>@{host}", parsed_url.path, parsed_url.query, parsed_url.fragment))
+
+
+def _format_proxy_log_value(proxies: dict[str, str] | None) -> str:
+    if not proxies:
+        return "<not configured>"
+
+    return _format_log_value({proxy_type: _redact_proxy_url(proxy_url) for proxy_type, proxy_url in proxies.items()})
+
+
+def _log_connector_proxy_request(
+    operator_identifier: str,
+    method: str,
+    url: str,
+    headers: dict[str, Any],
+    body: Any,
+    proxies: dict[str, str] | None,
+) -> None:
     if not connector_proxy_http_logging_enabled():
         return
     logger.info(
-        "Connector proxy request\nOperator: %s\nMethod: %s\nURL: %s\nHeaders:\n%s\nBody:\n%s",
+        "Connector proxy request\nOperator: %s\nMethod: %s\nURL: %s\nHTTP proxy:\n%s\nHeaders:\n%s\nBody:\n%s",
         operator_identifier,
         method,
         url,
+        _format_proxy_log_value(proxies),
         _format_log_value(_redact_sensitive_headers(headers)),
         _format_log_value(body),
     )
 
 
 def _log_connector_proxy_response(
-    operator_identifier: str, method: str, url: str, status_code: int, headers: Any, body: str
+    operator_identifier: str,
+    method: str,
+    url: str,
+    status_code: int,
+    headers: Any,
+    body: str,
+    proxies: dict[str, str] | None,
 ) -> None:
     if not connector_proxy_http_logging_enabled():
         return
     response_headers = dict(headers) if headers is not None else None
     logger.info(
-        "Connector proxy response\nOperator: %s\nMethod: %s\nURL: %s\nStatus: %s\nHeaders:\n%s\nBody:\n%s",
+        "Connector proxy response\nOperator: %s\nMethod: %s\nURL: %s\nHTTP proxy:\n%s\nStatus: %s\nHeaders:\n%s\nBody:\n%s",
         operator_identifier,
         method,
         url,
+        _format_proxy_log_value(proxies),
         status_code,
         _format_log_value(_redact_sensitive_headers(response_headers)),
         _format_log_value(body),
@@ -141,15 +176,23 @@ def _log_connector_proxy_response(
 
 
 def _log_connector_proxy_exception(
-    operator_identifier: str, method: str, url: str, headers: dict[str, Any], body: Any, exception: Exception
+    operator_identifier: str,
+    method: str,
+    url: str,
+    headers: dict[str, Any],
+    body: Any,
+    exception: Exception,
+    proxies: dict[str, str] | None,
 ) -> None:
     if not connector_proxy_http_logging_enabled():
         return
     logger.error(
-        "Connector proxy request failed\nOperator: %s\nMethod: %s\nURL: %s\nHeaders:\n%s\nBody:\n%s\nException: %s: %s",
+        "Connector proxy request failed\nOperator: %s\nMethod: %s\nURL: %s\nHTTP proxy:\n%s\n"
+        "Headers:\n%s\nBody:\n%s\nException: %s: %s",
         operator_identifier,
         method,
         url,
+        _format_proxy_log_value(proxies),
         _format_log_value(_redact_sensitive_headers(headers)),
         _format_log_value(body),
         exception.__class__.__name__,
@@ -260,7 +303,7 @@ class ServiceTaskDelegate:
     ) -> None:
         base_error = None
         error_status_code = status_code
-        upstream_status = None
+
         if (
             "command_response_version" in parsed_response
             and parsed_response.get("command_response_version", 0) > 1
@@ -269,15 +312,14 @@ class ServiceTaskDelegate:
             upstream_status = parsed_response["command_response"].get("http_status")
             if isinstance(upstream_status, int) and upstream_status >= 300:
                 error_status_code = upstream_status
+                base_error = {
+                    "error_code": f"ServiceTaskHttpError{error_status_code}",
+                    "message": f"Service task received HTTP {error_status_code} from upstream service. Response: {response_text}",
+                }
 
         if "error" in parsed_response and isinstance(parsed_response["error"], dict) and "error_code" in parsed_response["error"]:
             base_error = parsed_response["error"]
-        elif isinstance(upstream_status, int) and upstream_status >= 300:
-            base_error = {
-                "error_code": f"ServiceTaskHttpError{upstream_status}",
-                "message": f"Service task received HTTP {upstream_status} from upstream service. Response: {response_text}",
-            }
-        elif status_code >= 300:
+        elif not base_error and status_code >= 300:
             error_message = ""
             if "error" in parsed_response:
                 error_response = parsed_response["error"] or ""
@@ -330,7 +372,10 @@ class ServiceTaskDelegate:
                 )
                 params = DefaultRegistry().convert(params)
                 request_headers = connector_proxy_api_key_headers()
-                _log_connector_proxy_request(operator_identifier, request_method, call_url, request_headers, params)
+                request_proxies = connector_proxy_request_proxies()
+                _log_connector_proxy_request(
+                    operator_identifier, request_method, call_url, request_headers, params, request_proxies
+                )
                 response_text = ""
                 status_code = 0
                 parsed_response: dict = {}
@@ -353,7 +398,7 @@ class ServiceTaskDelegate:
                             json=params,
                             headers=request_headers,
                             timeout=CONNECTOR_PROXY_COMMAND_TIMEOUT,
-                            proxies=connector_proxy_request_proxies(),
+                            proxies=request_proxies,
                         )
 
                     status_code = proxied_response.status_code
@@ -365,10 +410,11 @@ class ServiceTaskDelegate:
                         status_code,
                         proxied_response.headers,
                         response_text,
+                        request_proxies,
                     )
                 except Exception as exception:
                     _log_connector_proxy_exception(
-                        operator_identifier, request_method, call_url, request_headers, params, exception
+                        operator_identifier, request_method, call_url, request_headers, params, exception, request_proxies
                     )
                     status_code = status_code or 500
                     parsed_response = {
@@ -377,9 +423,6 @@ class ServiceTaskDelegate:
                             "message": str(exception),
                         }
                     }
-
-                if status_code == 202:
-                    raise Accepted202Exception()
 
                 if "error" not in parsed_response:
                     try:
@@ -405,6 +448,9 @@ class ServiceTaskDelegate:
                     response_text = json.dumps(new_response)
 
                 cls.check_for_errors(spiff_task, parsed_response, status_code, response_text, operator_identifier)
+
+                if status_code == 202:
+                    raise Accepted202Exception()
 
                 if "refreshed_token_set" not in parsed_response:
                     return response_text or "{}"
@@ -438,31 +484,42 @@ class ServiceTaskDelegateService:
 
     @staticmethod
     def available_connectors() -> Any:
+        request_proxies = connector_proxy_request_proxies()
         try:
             response = safe_requests.get(
                 f"{connector_proxy_url()}/v1/commands",
                 headers=connector_proxy_api_key_headers(),
                 timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
-                proxies=connector_proxy_request_proxies(),
+                proxies=request_proxies,
             )
 
             if response.status_code != 200:
+                current_app.logger.warning(
+                    "Connector proxy commands request returned status %s; falling back to internal connectors. HTTP proxy: %s",
+                    response.status_code,
+                    _format_proxy_log_value(request_proxies),
+                )
                 return ServiceTaskDelegateService._internal_connectors()
 
             parsed_response = json.loads(response.text)
             return ServiceTaskDelegateService._with_internal_connectors(parsed_response)
         except Exception as e:
-            current_app.logger.error(e)
+            current_app.logger.error(
+                "Connector proxy commands request failed; falling back to internal connectors. HTTP proxy: %s. Error: %s",
+                _format_proxy_log_value(request_proxies),
+                e,
+            )
             return ServiceTaskDelegateService._internal_connectors()
 
     @staticmethod
     def authentication_list() -> Any:
+        request_proxies = connector_proxy_request_proxies()
         try:
             response = safe_requests.get(
                 f"{connector_proxy_url()}/v1/auths",
                 headers=connector_proxy_api_key_headers(),
                 timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
-                proxies=connector_proxy_request_proxies(),
+                proxies=request_proxies,
             )
 
             if response.status_code != 200:
