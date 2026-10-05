@@ -6,7 +6,7 @@ from starlette.testclient import TestClient
 
 from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.process_instance import ProcessInstanceStatus
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
+from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.services.authorization_service import AuthorizationService
 from spiffworkflow_backend.services.authorization_service import GroupPermissionsDict
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
@@ -46,7 +46,7 @@ class TestPublicController(BaseTest):
                 "permissions": [{"actions": ["create", "read"], "uri": "/public/*"}],
             }
         ]
-        AuthorizationService.refresh_permissions(group_info, group_permissions_only=True)
+        AuthorizationService.add_permissions_from_group_permissions(group_info, group_permissions_only=True)
         process_model = load_test_spec(
             process_model_id="test_group/message-start-event-with-form",
             process_model_source_directory="message-start-event-with-form",
@@ -79,7 +79,7 @@ class TestPublicController(BaseTest):
                 "permissions": [{"actions": ["create", "read"], "uri": "/public/*"}],
             }
         ]
-        AuthorizationService.refresh_permissions(group_info, group_permissions_only=True)
+        AuthorizationService.add_permissions_from_group_permissions(group_info, group_permissions_only=True)
         process_model = load_test_spec(
             process_model_id="test_group/message-start-event-with-form",
             process_model_source_directory="message-start-event-with-form",
@@ -122,7 +122,7 @@ class TestPublicController(BaseTest):
                 "permissions": [{"actions": ["all"], "uri": "/*"}],
             },
         ]
-        AuthorizationService.refresh_permissions(group_info)
+        AuthorizationService.add_permissions_from_group_permissions(group_info)
         process_model = load_test_spec(
             process_model_id="test_group/message-start-event-with-multiple-forms",
             process_model_source_directory="message-start-event-with-multiple-forms",
@@ -199,7 +199,7 @@ class TestPublicController(BaseTest):
                 "permissions": [{"actions": ["all"], "uri": "/*"}],
             },
         ]
-        AuthorizationService.refresh_permissions(group_info)
+        AuthorizationService.add_permissions_from_group_permissions(group_info)
 
         process_group_id = "my_process_group"
         process_model_id = "test-allow-guest"

@@ -1,7 +1,9 @@
 import json
 import os
 import sys
+from functools import partial
 from typing import Any
+from typing import cast
 
 import flask.wrappers
 import sentry_sdk
@@ -56,7 +58,7 @@ def setup_prometheus_metrics(connexion_app: FlaskApp) -> None:
         metrics.info("version_info", "Application Version Info", **version_info_data_normalized)
 
 
-def traces_sampler(sampling_context: Any) -> Any:
+def traces_sampler(sampling_context: Any, default_sample_rate: float = 0.01) -> Any:
     # always inherit
     if sampling_context["parent_sampled"] is not None:
         return sampling_context["parent_sampled"]
@@ -77,7 +79,7 @@ def traces_sampler(sampling_context: Any) -> Any:
     #         return 1
 
     # Default sample rate for all others (replaces traces_sample_rate)
-    return 0.01
+    return default_sample_rate
 
 
 def should_capture_exception_in_sentry(exc_value: BaseException) -> bool:
@@ -93,20 +95,60 @@ def should_capture_exception_in_sentry(exc_value: BaseException) -> bool:
     return should_notify_sentry(exc_value)
 
 
+def scrub_transaction_event(event: dict[str, Any], _hint: Any) -> dict[str, Any]:
+    tags = event.get("tags")
+    if isinstance(tags, dict):
+        tags.pop("url", None)
+    elif isinstance(tags, list):
+        event["tags"] = [tag for tag in tags if not (isinstance(tag, dict) and tag.get("key") == "url")]
+    return event
+
+
+def _has_usable_exception_info(exc_info: Any) -> bool:
+    return (
+        isinstance(exc_info, tuple)
+        and len(exc_info) == 3
+        and isinstance(exc_info[0], type)
+        and issubclass(exc_info[0], BaseException)
+        and isinstance(exc_info[1], BaseException)
+    )
+
+
+def filter_sentry_error_event(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep exception captures while dropping message-only logs and Flask duplicates."""
+    log_record = hint.get("log_record")
+    log_record_exc_info = getattr(log_record, "exc_info", None)
+    hint_exc_info = hint.get("exc_info")
+    exc_info = log_record_exc_info if _has_usable_exception_info(log_record_exc_info) else hint_exc_info
+
+    # Plain messages remain application logs and Sentry breadcrumbs, but do not create Sentry issues.
+    # logger.exception() and logger.error(..., exc_info=...) are retained as exception events.
+    if not _has_usable_exception_info(exc_info):
+        return None
+    usable_exc_info = cast(tuple[type[BaseException], BaseException, Any], exc_info)
+
+    exception_values = event.get("exception", {}).get("values", [])
+
+    # we ignore all unhandled flask exceptions for purposes of sentry notification,
+    # because these go through handle_exception, where we capture_exception explicitly.
+    if any(
+        value.get("mechanism", {}).get("type") == "flask" and value.get("mechanism", {}).get("handled") is False
+        for value in exception_values
+    ):
+        return None
+
+    _exc_type, exc_value, _tb = usable_exc_info
+    if not should_capture_exception_in_sentry(exc_value):
+        return None
+    return event
+
+
 def configure_sentry(app: flask.app.Flask) -> None:
     sentry_dsn = app.config.get("SPIFFWORKFLOW_BACKEND_SENTRY_DSN")
 
     # Skip Sentry initialization if no DSN is configured (e.g., in tests)
     if not sentry_dsn:
         return
-
-    # get rid of NotFound errors
-    def before_send(event: Any, hint: Any) -> Any:
-        if "exc_info" in hint:
-            _exc_type, exc_value, _tb = hint["exc_info"]
-            if not should_capture_exception_in_sentry(exc_value):
-                return None
-        return event
 
     sentry_errors_sample_rate = app.config.get("SPIFFWORKFLOW_BACKEND_SENTRY_ERRORS_SAMPLE_RATE")
     if sentry_errors_sample_rate is None:
@@ -133,9 +175,13 @@ def configure_sentry(app: flask.app.Flask) -> None:
         # of transactions for performance monitoring.
         # We recommend adjusting this value to less than 1(00%) in production.
         "traces_sample_rate": float(sentry_traces_sample_rate),
-        "traces_sampler": traces_sampler,
+        "traces_sampler": partial(
+            traces_sampler,
+            default_sample_rate=float(sentry_traces_sample_rate),
+        ),
         # The profiles_sample_rate setting is relative to the traces_sample_rate setting.
-        "before_send": before_send,
+        "before_send": filter_sentry_error_event,
+        "before_send_transaction": scrub_transaction_event,
     }
 
     # https://docs.sentry.io/platforms/python/configuration/releases

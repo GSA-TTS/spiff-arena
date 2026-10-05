@@ -68,9 +68,10 @@ config_from_env("SPIFFWORKFLOW_BACKEND_SECRET_KEY_OPENAI_API")
 ### extensions
 config_from_env("SPIFFWORKFLOW_BACKEND_EXTENSIONS_PROCESS_MODEL_PREFIX", default="extensions")
 config_from_env("SPIFFWORKFLOW_BACKEND_GLOBAL_SCRIPTS_DIR", default=None)
+config_from_env("SPIFFWORKFLOW_BACKEND_APP_EXTENSIONS", default="[]")
 config_from_env("SPIFFWORKFLOW_BACKEND_EXTENSIONS_API_ENABLED", default=False)
 
-### background processor
+### background runtime
 config_from_env("SPIFFWORKFLOW_BACKEND_RUN_BACKGROUND_SCHEDULER_IN_CREATE_APP", default=False)
 config_from_env("SPIFFWORKFLOW_BACKEND_BACKGROUND_SCHEDULER_ALLOW_OPTIMISTIC_CHECKS", default=True)
 config_from_env("SPIFFWORKFLOW_BACKEND_BACKGROUND_SCHEDULER_POLLING_INTERVAL_IN_SECONDS", default=10)
@@ -83,6 +84,8 @@ config_from_env("SPIFFWORKFLOW_BACKEND_CELERY_BROKER_URL", default="redis://loca
 config_from_env("SPIFFWORKFLOW_BACKEND_CELERY_RESULT_BACKEND", default=None)
 config_from_env("SPIFFWORKFLOW_BACKEND_CELERY_SQS_URL", default=None)
 config_from_env("SPIFFWORKFLOW_BACKEND_CELERY_RESULT_S3_BUCKET", default=None)
+config_from_env("SPIFFWORKFLOW_BACKEND_AUTO_SAVE_MAX_TASKS", default=50)
+config_from_env("SPIFFWORKFLOW_BACKEND_AUTO_SAVE_MAX_SECONDS", default=10)
 config_from_env("SPIFFWORKFLOW_BACKEND_PROCESS_INSTANCE_METADATA_BACKFILL_ENABLED", default=False)
 
 # give a little overlap to ensure we do not miss items although the query will handle it either way
@@ -90,9 +93,13 @@ config_from_env("SPIFFWORKFLOW_BACKEND_BACKGROUND_SCHEDULER_FUTURE_TASK_LOOKAHEA
 config_from_env("SPIFFWORKFLOW_BACKEND_BACKGROUND_SCHEDULER_FUTURE_TASK_EXECUTION_INTERVAL_IN_SECONDS", default=300)
 
 ### frontend
-config_from_env("SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND", default="http://localhost:7001")
+config_from_env("SPIFFWORKFLOW_BACKEND_FRONTEND_URL", default="http://localhost:7001")
+# Deprecated alias for SPIFFWORKFLOW_BACKEND_FRONTEND_URL. Reconciliation (with deprecation
+# warning) happens in spiffworkflow_backend.config.setup_config.
+config_from_env("SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND", default=None)
 config_from_env("SPIFFWORKFLOW_BACKEND_URL", default="http://localhost:7000")
 config_from_env("SPIFFWORKFLOW_BACKEND_CHECK_FRONTEND_AND_BACKEND_URL_COMPATIBILITY", default=True)
+config_from_env("SPIFFWORKFLOW_BACKEND_ALLOWED_REDIRECT_HOST_ALIASES", default="localhost,127.0.0.1,::1")
 cors_allow_all = "*"
 SPIFFWORKFLOW_BACKEND_CORS_ALLOW_ORIGINS = re.split(
     r",\s*",
@@ -127,6 +134,9 @@ config_from_env("SPIFFWORKFLOW_BACKEND_DATABASE_POOL_PRE_PING", default=True)
 ### open id
 config_from_env("SPIFFWORKFLOW_BACKEND_AUTHENTICATION_DISABLED", default=False)
 config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS", default=False)
+# Name of the ID/access-token claim containing the user's group identifiers.
+# Defaults to the conventional "groups" claim and can be changed per provider.
+config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_GROUPS_CLAIM", default="groups")
 # Tenant specific fields is a comma separated list of field names that we will be converted to list of strings
 # and store in the user table's tenant_specific_field_n columns. You can have up to three items in this
 # comma-separated list.
@@ -141,6 +151,10 @@ config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_ENFORCE_PKCE", default=False)  # 
 config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_PRIVATE_KEY")
 config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_PUBLIC_KEY")
 config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_CACHE_DIR")
+config_from_env(
+    "SPIFFWORKFLOW_BACKEND_OPEN_ID_LOGOUT_QUERY_STRING_TEMPLATE",
+    default="post_logout_redirect_uri={redirect_url}&id_token_hint={id_token}",
+)
 
 
 # Open ID server
@@ -170,6 +184,11 @@ else:
         #       if client-B is added to this list, then an api user can auth with keycloak
         #           and use that token successfully with backend
         config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_ADDITIONAL_VALID_CLIENT_IDS")
+        # Optional comma-separated API audiences for access-token validation. When omitted,
+        # the legacy client-id/account audience behavior remains in effect.
+        config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_ACCESS_TOKEN_AUDIENCES")
+        # Optional RFC 8707 resource indicator to include in authorization requests.
+        config_from_env("SPIFFWORKFLOW_BACKEND_OPEN_ID_AUTHORIZATION_RESOURCE")
     else:
         SPIFFWORKFLOW_BACKEND_AUTH_CONFIGS = [
             {
@@ -181,6 +200,9 @@ else:
                 "client_secret": "JXeQExm0JhQPLumgHtIIqf52bDalHz0q",
                 "additional_valid_client_ids": None,
                 "additional_valid_issuers": [],
+                "access_token_audiences": None,
+                "authorization_resource": None,
+                "logout_query_string_template": "post_logout_redirect_uri={redirect_url}&id_token_hint={id_token}",
             }
         ]
 

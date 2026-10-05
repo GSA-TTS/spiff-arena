@@ -11,6 +11,7 @@ from flask import current_app
 from flask import g
 from flask import jsonify
 from flask import make_response
+from lxml.etree import XMLSyntaxError  # type: ignore
 from SpiffWorkflow.bpmn.parser.ValidationException import ValidationException  # type: ignore
 from werkzeug.datastructures import FileStorage
 
@@ -20,6 +21,7 @@ from spiffworkflow_backend.interfaces import IdToProcessGroupMapping
 from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.file import FileType
 from spiffworkflow_backend.models.process_group import ProcessGroup
+from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.process_instance_report import ProcessInstanceReportModel
 from spiffworkflow_backend.models.process_model import ProcessModelInfo
 from spiffworkflow_backend.models.reference_cache import ReferenceCacheModel
@@ -31,9 +33,10 @@ from spiffworkflow_backend.services.file_system_service import FileSystemService
 from spiffworkflow_backend.services.git_service import GitCommandError
 from spiffworkflow_backend.services.git_service import GitService
 from spiffworkflow_backend.services.git_service import MissingGitConfigsError
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.message_definition_service import MessageDefinitionService
 from spiffworkflow_backend.services.process_instance_report_service import ProcessInstanceReportNotFoundError
 from spiffworkflow_backend.services.process_instance_report_service import ProcessInstanceReportService
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_model_service import ProcessModelService
 from spiffworkflow_backend.services.process_model_service import ProcessModelWithInstancesNotDeletableError
 from spiffworkflow_backend.services.process_model_test_generator_service import ProcessModelTestGeneratorService
@@ -113,6 +116,7 @@ def process_model_delete(
 
         # can't do this in the ProcessModelService due to circular imports
         SpecFileService.clear_caches_for_item(process_model_info=process_model)
+        MessageDefinitionService.remove_process_model_from_usage(process_model_identifier)
         db.session.commit()
     except ProcessModelWithInstancesNotDeletableError as exception:
         raise ApiError(
@@ -179,10 +183,15 @@ def process_model_update(
     return process_model.to_dict()
 
 
-def process_model_show(modified_process_model_identifier: str, include_file_references: bool = False) -> Any:
+def process_model_show(
+    modified_process_model_identifier: str, include_file_references: bool = False, include_file_contents: bool = False
+) -> Any:
     process_model_identifier = modified_process_model_identifier.replace(":", "/")
     process_model = _get_process_model(process_model_identifier)
     files = FileSystemService.get_sorted_files(process_model)
+    if include_file_contents:
+        for file in files:
+            file.file_contents = SpecFileService.get_data(process_model, file.name)
     process_model.files = files
 
     reference_cache_processes = (
@@ -203,7 +212,7 @@ def process_model_show(modified_process_model_identifier: str, include_file_refe
             try:
                 refs = SpecFileService.get_references_for_file(file, process_model)
                 file.references = refs
-            except ValidationException as exception:
+            except (ValidationException, XMLSyntaxError) as exception:
                 file.references = [{"identifier": f"ERROR: {exception.__class__.__name__}", "display_name": str(exception)}]  # type: ignore
 
     process_model.parent_groups = ProcessModelService.get_parent_group_array(process_model.id)
@@ -262,6 +271,20 @@ def process_model_publish(modified_process_model_identifier: str, branch_to_upda
     pr_url = GitService().publish(process_model_identifier, branch_to_update)
     data = {"ok": True, "pr_url": pr_url}
     return make_response(jsonify(data), 200)
+
+
+def process_model_stats() -> flask.wrappers.Response:
+    rows = (
+        db.session.query(
+            ProcessInstanceModel.process_model_identifier,
+            db.func.count(ProcessInstanceModel.id),
+            db.func.max(ProcessInstanceModel.start_in_seconds),
+        )
+        .group_by(ProcessInstanceModel.process_model_identifier)
+        .all()
+    )
+    stats = {row[0]: {"instance_count": row[1], "last_run_in_seconds": row[2]} for row in rows}
+    return make_response(jsonify(stats), 200)
 
 
 def process_model_list(
@@ -332,14 +355,13 @@ def process_model_file_delete(modified_process_model_identifier: str, file_name:
 
     try:
         SpecFileService.delete_file(process_model, file_name)
+        DataSetupService.refresh_single_process_model_cache(process_model_identifier)
         db.session.commit()
     except FileNotFoundError as exception:
-        raise (
-            ApiError(
-                error_code="process_model_file_cannot_be_found",
-                message=f"Process model file cannot be found: {file_name}",
-                status_code=400,
-            )
+        raise ApiError(
+            error_code="process_model_file_cannot_be_found",
+            message=f"Process model file cannot be found: {file_name}",
+            status_code=400,
         ) from exception
 
     GitService.commit_on_save(f"User: {g.user.username} deleted process model file {process_model_identifier}/{file_name}")
@@ -372,7 +394,10 @@ def process_model_file_show(modified_process_model_identifier: str, file_name: s
     file.process_model_id = process_model.id
 
     if file.type == FileType.bpmn.value:
-        file.bpmn_process_ids = SpecFileService.get_bpmn_process_ids_for_file_contents(file_contents)
+        try:
+            file.bpmn_process_ids = SpecFileService.get_bpmn_process_ids_for_file_contents(file_contents)
+        except XMLSyntaxError as exception:
+            raise ApiError.from_invalid_xml(file.name, exception) from exception
 
     return make_response(jsonify(file), 200)
 
@@ -414,10 +439,10 @@ def process_model_test_generate(modified_process_model_identifier: str, body: di
 
     test_case_identifier = body.get("test_case_identifier", f"test_case_for_process_instance_{process_instance_id}")
     process_instance = _find_process_instance_by_id_or_raise(int(process_instance_id))
-    processor = ProcessInstanceProcessor(
+    runtime = ProcessInstanceRuntime(
         process_instance, include_task_data_for_completed_tasks=True, include_completed_subprocesses=True
     )
-    process_instance_dict = processor.serialize()
+    process_instance_dict = runtime.serialize()
     test_case_dict = ProcessModelTestGeneratorService.generate_test_from_process_instance_dict(
         process_instance_dict, test_case_identifier=str(test_case_identifier)
     )
@@ -624,12 +649,10 @@ def _create_or_update_process_model_file(
     try:
         file, _ = SpecFileService.update_file(process_model, request_file.filename, request_file_contents, user=g.user)
     except ProcessModelFileInvalidError as exception:
-        raise (
-            ApiError(
-                error_code="process_model_file_invalid",
-                message=f"Invalid Process model file: {request_file.filename}. Received error: {str(exception)}",
-                status_code=400,
-            )
+        raise ApiError(
+            error_code="process_model_file_invalid",
+            message=f"Invalid Process model file: {request_file.filename}. Received error: {str(exception)}",
+            status_code=400,
         ) from exception
     file_contents = SpecFileService.get_data(process_model, file.name)
     file.file_contents = file_contents

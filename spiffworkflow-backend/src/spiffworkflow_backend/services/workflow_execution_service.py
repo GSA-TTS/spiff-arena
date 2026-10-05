@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import cProfile
 import sys
 import time
 from abc import abstractmethod
 from collections.abc import Callable
 from datetime import datetime
+from pstats import SortKey
 from threading import Lock
 from typing import Any
 from uuid import UUID
@@ -27,6 +29,7 @@ from SpiffWorkflow.bpmn.specs.control import BoundaryEventSplit
 from SpiffWorkflow.bpmn.specs.control import UnstructuredJoin
 from SpiffWorkflow.bpmn.specs.event_definitions.item_aware_event import CodeEventDefinition  # type: ignore
 from SpiffWorkflow.bpmn.specs.event_definitions.message import MessageEventDefinition  # type: ignore
+from SpiffWorkflow.bpmn.specs.event_definitions.simple import TerminateEventDefinition  # type: ignore
 from SpiffWorkflow.bpmn.specs.mixins import SubWorkflowTaskMixin  # type: ignore
 from SpiffWorkflow.bpmn.specs.mixins.events.intermediate_event import BoundaryEvent  # type: ignore
 from SpiffWorkflow.bpmn.workflow import BpmnWorkflow  # type: ignore
@@ -50,15 +53,15 @@ from spiffworkflow_backend.models.message_instance import MessageStatuses
 from spiffworkflow_backend.models.message_instance_correlation import MessageInstanceCorrelationRuleModel
 from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.process_instance_event import ProcessInstanceEventType
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
+from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.services.assertion_service import safe_assertion
 from spiffworkflow_backend.services.custom_service_task import CustomServiceTask
 from spiffworkflow_backend.services.custom_service_task import RetryScheduledError
 from spiffworkflow_backend.services.jinja_service import JinjaService
 from spiffworkflow_backend.services.logging_service import LoggingService
+from spiffworkflow_backend.services.process_instance_event_service import ProcessInstanceEventService
 from spiffworkflow_backend.services.process_instance_lock_service import ProcessInstanceLockService
-from spiffworkflow_backend.services.process_instance_tmp_service import ProcessInstanceTmpService
 from spiffworkflow_backend.services.process_model_service import ProcessModelService
 from spiffworkflow_backend.services.task_service import StartAndEndTimes
 from spiffworkflow_backend.services.task_service import TaskService
@@ -85,7 +88,16 @@ class WorkflowExecutionServiceError(WorkflowTaskException):  # type: ignore
         task: SpiffTask,
         unhandled_events: dict[str, list[Any]],
     ) -> WorkflowExecutionServiceError:
-        events = {k: [e.event_definition.code for e in v] for k, v in unhandled_events.items()}
+        # Error and escalation events are identified by code; other events by name.
+        events = {
+            event_type: [
+                event.event_definition.code
+                if isinstance(event.event_definition, CodeEventDefinition)
+                else event.event_definition.name
+                for event in event_group
+            ]
+            for event_type, event_group in unhandled_events.items()
+        }
 
         return cls(
             error_msg=f"The process completed with unhandled events: {events}",
@@ -112,6 +124,10 @@ class EngineStepDelegate:
 
     @abstractmethod
     def did_complete_task(self, spiff_task: SpiffTask) -> None:
+        pass
+
+    @abstractmethod
+    def did_remove_task(self, workflow: Any, spiff_task: SpiffTask) -> None:
         pass
 
     @abstractmethod
@@ -145,6 +161,15 @@ class ExecutionStrategy:
 
     def should_break_after(self, tasks: list[SpiffTask]) -> bool:
         return False
+
+    def should_break_before_starting_tasks(self) -> bool:
+        return False
+
+    def engine_steps_to_run(self, engine_steps: list[SpiffTask]) -> list[SpiffTask]:
+        return engine_steps
+
+    def task_runnability_when_breaking_after(self, bpmn_process_instance: BpmnWorkflow) -> TaskRunnability:
+        return TaskRunnability.unknown_if_ready_tasks
 
     def should_do_before(self, bpmn_process_instance: BpmnWorkflow, process_instance_model: ProcessInstanceModel) -> None:
         pass
@@ -199,13 +224,18 @@ class ExecutionStrategy:
         self, bpmn_process_instance: BpmnWorkflow, process_instance_model: ProcessInstanceModel, exit_at: None = None
     ) -> TaskRunnability:
         while True:
-            bpmn_process_instance.refresh_due_waiting_tasks()
+            bpmn_process_instance.refresh_timers()
             self.should_do_before(bpmn_process_instance, process_instance_model)
             engine_steps = self.get_ready_engine_steps(bpmn_process_instance)
             num_steps = len(engine_steps)
             if self.should_break_before(engine_steps, process_instance_model=process_instance_model):
                 task_runnability = TaskRunnability.has_ready_tasks if num_steps > 0 else TaskRunnability.no_ready_tasks
                 break
+            if self.should_break_before_starting_tasks():
+                task_runnability = self.task_runnability_when_breaking_after(bpmn_process_instance)
+                break
+            engine_steps = self.engine_steps_to_run(engine_steps)
+            num_steps = len(engine_steps)
             if num_steps == 0:
                 task_runnability = TaskRunnability.no_ready_tasks
                 break
@@ -235,8 +265,12 @@ class ExecutionStrategy:
                     self._run_engine_steps_without_threads(engine_steps, process_instance_model, user)
 
             if self.should_break_after(engine_steps):
-                # we could call the stuff at the top of the loop again and find out, but let's not do that unless we need to
-                task_runnability = TaskRunnability.unknown_if_ready_tasks
+                # Strategies decide whether checking post-step ready tasks is worth it.
+                task_runnability = (
+                    TaskRunnability.no_ready_tasks
+                    if bpmn_process_instance.is_completed()
+                    else self.task_runnability_when_breaking_after(bpmn_process_instance)
+                )
                 break
 
         self.delegate.after_engine_steps(bpmn_process_instance)
@@ -378,6 +412,7 @@ class TaskModelSavingDelegate(EngineStepDelegate):
         self._last_completed_spiff_task: SpiffTask | None = None
         self.spiff_tasks_to_process: set[UUID] = set()
         self.spiff_task_timestamps: dict[UUID, StartAndEndTimes] = {}
+        self.removed_spiff_tasks: dict[UUID, SpiffTask] = {}
 
         self.task_service = TaskService(
             process_instance=self.process_instance,
@@ -401,15 +436,21 @@ class TaskModelSavingDelegate(EngineStepDelegate):
     def did_complete_task(self, spiff_task: SpiffTask) -> None:
         if self._should_update_task_model():
             # NOTE: used with process-all-tasks and process-children-of-last-task
-            task_model = self.task_service.update_task_model_with_spiff_task(spiff_task)
             if self.current_task_start_in_seconds is None:
                 raise Exception("Could not find cached current_task_start_in_seconds. This should never have happened")
-            task_model.start_in_seconds = self.current_task_start_in_seconds
-            task_model.end_in_seconds = time.time()
+            task_end_in_seconds = time.time()
+            self.task_service.update_task_model_with_spiff_task(
+                spiff_task,
+                start_and_end_times={
+                    "start_in_seconds": self.current_task_start_in_seconds,
+                    "end_in_seconds": task_end_in_seconds,
+                },
+            )
 
         metadata = ProcessModelService.extract_metadata(
             self.process_instance.process_model_identifier,
             spiff_task.data,
+            process_instance=self.process_instance,
         )
         log_extras = {
             "task_id": str(spiff_task.id),
@@ -453,6 +494,12 @@ class TaskModelSavingDelegate(EngineStepDelegate):
         if self.secondary_engine_step_delegate:
             self.secondary_engine_step_delegate.did_complete_task(spiff_task)
 
+    def did_remove_task(self, workflow: Any, spiff_task: SpiffTask) -> None:
+        self.removed_spiff_tasks[spiff_task.id] = spiff_task
+
+        if self.secondary_engine_step_delegate:
+            self.secondary_engine_step_delegate.did_remove_task(workflow, spiff_task)
+
     def add_object_to_db_session(self, bpmn_process_instance: BpmnWorkflow) -> None:
         # NOTE: process-all-tasks: All tests pass with this but it's less efficient and would be nice to replace
         # excludes COMPLETED. the others were required to get PP1 to go to completion.
@@ -472,6 +519,22 @@ class TaskModelSavingDelegate(EngineStepDelegate):
             | TaskState.ERROR,
         ):
             self.task_service.update_task_model_with_spiff_task(waiting_spiff_task)
+
+        reported_removed_spiff_tasks = list(self.removed_spiff_tasks.values())
+        self.removed_spiff_tasks.clear()
+        removed_spiff_tasks = []
+        for removed_spiff_task in reported_removed_spiff_tasks:
+            task_model = self.task_service.find_existing_task_model(str(removed_spiff_task.id))
+            if (
+                task_model is not None
+                and task_model.state not in {"COMPLETED", "CANCELLED", "ERROR"}
+                and (task_model.properties_json.get("triggered") is True or task_model.state in {"READY", "WAITING", "STARTED"})
+            ):
+                removed_spiff_tasks.append(removed_spiff_task)
+        deleted_task_guids = {str(spiff_task.id) for spiff_task in removed_spiff_tasks}
+
+        self.task_service.queue_task_model_deletions_by_guid(deleted_task_guids)
+        self.task_service.prune_deleted_child_references(removed_spiff_tasks, deleted_task_guids)
 
         self.task_service.save_objects_to_database()
 
@@ -512,6 +575,8 @@ class QueueInstructionsForEndUserExecutionStrategy(ExecutionStrategy):
     def __init__(self, delegate: EngineStepDelegate, options: dict | None = None):
         super().__init__(delegate, options)
         self.tasks_that_have_been_seen: set[str] = set()
+        self.completed_task_count = 0
+        self.started_at = time.monotonic()
 
     def should_do_before(self, bpmn_process_instance: BpmnWorkflow, process_instance_model: ProcessInstanceModel) -> None:
         tasks = bpmn_process_instance.get_tasks(state=TaskState.WAITING | TaskState.READY)
@@ -526,6 +591,28 @@ class QueueInstructionsForEndUserExecutionStrategy(ExecutionStrategy):
             ):
                 return True
         return False
+
+    def should_break_after(self, tasks: list[SpiffTask]) -> bool:
+        self.completed_task_count += len(tasks)
+        max_tasks = int(current_app.config["SPIFFWORKFLOW_BACKEND_AUTO_SAVE_MAX_TASKS"])
+        max_seconds = int(current_app.config["SPIFFWORKFLOW_BACKEND_AUTO_SAVE_MAX_SECONDS"])
+        return self.completed_task_count >= max_tasks or time.monotonic() - self.started_at >= max_seconds
+
+    def should_break_before_starting_tasks(self) -> bool:
+        max_seconds = int(current_app.config["SPIFFWORKFLOW_BACKEND_AUTO_SAVE_MAX_SECONDS"])
+        return time.monotonic() - self.started_at >= max_seconds
+
+    def engine_steps_to_run(self, engine_steps: list[SpiffTask]) -> list[SpiffTask]:
+        max_tasks = int(current_app.config["SPIFFWORKFLOW_BACKEND_AUTO_SAVE_MAX_TASKS"])
+        return engine_steps[: max_tasks - self.completed_task_count]
+
+    def task_runnability_when_breaking_after(self, bpmn_process_instance: BpmnWorkflow) -> TaskRunnability:
+        bpmn_process_instance.refresh_timers()
+        return (
+            TaskRunnability.has_ready_tasks
+            if self.get_ready_engine_steps(bpmn_process_instance)
+            else TaskRunnability.no_ready_tasks
+        )
 
 
 class RunUntilUserTaskOrMessageExecutionStrategy(ExecutionStrategy):
@@ -610,7 +697,7 @@ class WorkflowExecutionService:
         self.new_waiting_message_names: set[str] = set()
 
     # names of methods that do spiff stuff:
-    # processor.do_engine_steps calls:
+    # runtime.do_engine_steps calls:
     #   run
     #     execution_strategy.spiff_run
     #       spiff.[some_run_task_method]
@@ -623,9 +710,6 @@ class WorkflowExecutionService:
         needs_dequeue: bool = True,
     ) -> TaskRunnability:
         if profile:
-            import cProfile
-            from pstats import SortKey
-
             task_runnability = TaskRunnability.unknown_if_ready_tasks
             with cProfile.Profile() as pr:
                 task_runnability = self._run_and_save(
@@ -651,6 +735,8 @@ class WorkflowExecutionService:
                         "The current thread has not obtained a lock for this process"
                         f" instance ({self.process_instance_model.id})."
                     )
+        task_removed_event = self.bpmn_process_instance.task_removed_event
+        task_removed_event.connect(self.execution_strategy.delegate.did_remove_task)
         try:
             self.refresh_due_service_task_retries()
 
@@ -666,7 +752,7 @@ class WorkflowExecutionService:
             self.new_waiting_message_names = self.queue_waiting_receive_messages()
             return task_runnability
         except WorkflowTaskException as wte:
-            ProcessInstanceTmpService.add_event_to_process_instance(
+            ProcessInstanceEventService.add_event_to_process_instance(
                 self.process_instance_model,
                 ProcessInstanceEventType.task_failed.value,
                 exception=wte,
@@ -679,13 +765,16 @@ class WorkflowExecutionService:
             raise ApiError.from_workflow_exception("task_error", str(swe), swe) from swe
 
         finally:
-            if self.process_instance_model.persistence_level != "none":
-                # even if a task fails, try to persist all tasks, which will include the error state.
-                self.execution_strategy.add_object_to_db_session(self.bpmn_process_instance)
-                if save:
-                    self.process_instance_saver()
-                    if should_schedule_waiting_timer_events:
-                        self.schedule_waiting_timer_events()
+            try:
+                if self.process_instance_model.persistence_level != "none":
+                    # even if a task fails, try to persist all tasks, which will include the error state.
+                    self.execution_strategy.add_object_to_db_session(self.bpmn_process_instance)
+                    if save:
+                        self.process_instance_saver()
+                        if should_schedule_waiting_timer_events:
+                            self.schedule_waiting_timer_events()
+            finally:
+                task_removed_event.disconnect(self.execution_strategy.delegate.did_remove_task)
 
     def refresh_due_service_task_retries(self) -> None:
         current_time = round(time.time())
@@ -718,7 +807,8 @@ class WorkflowExecutionService:
                     event = spiff_task.task_spec.event_definition.details(spiff_task)
                     if "Time" in event.event_type:
                         time_string = event.value
-                        run_at_in_seconds = round(datetime.fromisoformat(time_string).timestamp())
+                        if time_string is not None:
+                            run_at_in_seconds = round(datetime.fromisoformat(time_string).timestamp())
 
                 if run_at_in_seconds is None and "spiff__retry_at" in spiff_task.internal_data:
                     run_at_in_seconds = spiff_task.internal_data["spiff__retry_at"]
@@ -748,6 +838,8 @@ class WorkflowExecutionService:
     def process_bpmn_events(self) -> None:
         bpmn_event_groups = self.group_bpmn_events()
         message_events = bpmn_event_groups.pop(MessageEventDefinition.__name__, [])
+        # A terminate end event is normal completion, not an unhandled event.
+        bpmn_event_groups.pop(TerminateEventDefinition.__name__, [])
 
         if bpmn_event_groups:
             raise WorkflowExecutionServiceError.from_completion_with_unhandled_events(

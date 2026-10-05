@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import Button from '@mui/material/Button'; // Updated import for MUI Button
-import { Can } from '@casl/react';
+import { Can } from '../contexts/Can';
 import { useState } from 'react';
 import {
   PermissionsToCheck,
@@ -11,6 +11,7 @@ import {
 import HttpService from '../services/HttpService';
 import { setLastProcessInstanceRunLocation } from '../services/LocalStorageService';
 import { modifyProcessIdentifierForPathParam } from '../helpers';
+import { stripBasePath } from '../helpers/basePath';
 import { usePermissionFetcher } from '../hooks/PermissionService';
 import useAPIError from '../hooks/UseApiError';
 
@@ -97,7 +98,9 @@ export default function ProcessInstanceRun({
 
   const onProcessInstanceRun = (processInstance: ProcessInstance) => {
     const processInstanceId = processInstance.id;
-    setLastProcessInstanceRunLocation(window.location.pathname);
+    // Strip the base path since consumers pass this value to navigate(),
+    // which re-applies the router basename.
+    setLastProcessInstanceRunLocation(stripBasePath(window.location.pathname));
 
     if (processInstance.process_model_uses_queued_execution) {
       navigate(

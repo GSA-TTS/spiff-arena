@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { CircularProgress } from '@mui/material';
@@ -141,7 +141,7 @@ export default function ProcessInstanceProgress({
         <>
           <ErrorDisplayStateless errorObject={currentPageError} />
           <p>
-            Go to <a href={processInstanceShowPageUrl}>Process Instance</a>
+            Go to <Link to={processInstanceShowPageUrl}>Process Instance</Link>
           </p>
         </>
       );

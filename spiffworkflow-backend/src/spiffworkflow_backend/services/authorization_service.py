@@ -32,12 +32,10 @@ from spiffworkflow_backend.models.permission_target import PermissionTargetModel
 from spiffworkflow_backend.models.principal import PrincipalModel
 from spiffworkflow_backend.models.process_model import ProcessModelInfo
 from spiffworkflow_backend.models.service_account import SPIFF_SERVICE_ACCOUNT_AUTH_SERVICE
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
 from spiffworkflow_backend.models.user import SPIFF_GUEST_USER
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.models.user_group_assignment import UserGroupAssignmentModel
 from spiffworkflow_backend.models.user_group_assignment_waiting import UserGroupAssignmentWaitingModel
-from spiffworkflow_backend.routes.openid_blueprint import openid_blueprint
 from spiffworkflow_backend.services.user_service import UserService
 
 
@@ -90,6 +88,7 @@ PUBLIC_AUTHENTICATION_EXCLUSION_LIST = [
     "spiffworkflow_backend.routes.public_controller.message_form_show",
     "spiffworkflow_backend.routes.public_controller.message_form_submit",
 ]
+OPENID_BLUEPRINT_MODULE_NAME = "spiffworkflow_backend.routes.openid_blueprint.openid_blueprint"
 
 
 class AuthorizationService:
@@ -233,14 +232,16 @@ class AuthorizationService:
         return result
 
     @classmethod
-    def find_or_create_permission_target(cls, uri: str) -> PermissionTargetModel:
+    def find_or_create_permission_target(cls, uri: str, commit: bool = True) -> PermissionTargetModel:
         uri_with_percent = re.sub(r"\*", "%", uri)
         target_uri_normalized = remove_api_prefix(uri_with_percent)
         permission_target: PermissionTargetModel | None = PermissionTargetModel.query.filter_by(uri=target_uri_normalized).first()
         if permission_target is None:
             permission_target = PermissionTargetModel(uri=target_uri_normalized)
             db.session.add(permission_target)
-            db.session.commit()
+            db.session.flush()
+            if commit:
+                db.session.commit()
         return permission_target
 
     @classmethod
@@ -250,6 +251,7 @@ class AuthorizationService:
         permission_target: PermissionTargetModel,
         permission: str,
         grant_type: str = "permit",
+        commit: bool = True,
     ) -> PermissionAssignmentModel:
         permission_assignment: PermissionAssignmentModel | None = PermissionAssignmentModel.query.filter_by(
             principal_id=principal.id,
@@ -264,11 +266,15 @@ class AuthorizationService:
                 grant_type=grant_type,
             )
             db.session.add(permission_assignment)
-            db.session.commit()
+            db.session.flush()
+            if commit:
+                db.session.commit()
         elif permission_assignment.grant_type != grant_type:
             permission_assignment.grant_type = grant_type
             db.session.add(permission_assignment)
-            db.session.commit()
+            db.session.flush()
+            if commit:
+                db.session.commit()
         return permission_assignment
 
     @classmethod
@@ -324,11 +330,10 @@ class AuthorizationService:
             return True
 
         api_function_full_path, module = cls.get_fully_qualified_api_function_from_request()
-        if (
-            api_function_full_path
-            and (api_function_full_path in cls.authentication_exclusion_list())
-            or module == openid_blueprint
-        ):
+        module_name = module.__name__ if module is not None else None
+        if module_name == OPENID_BLUEPRINT_MODULE_NAME:
+            return True
+        if api_function_full_path and api_function_full_path in cls.authentication_exclusion_list():
             return True
 
         return False
@@ -414,18 +419,22 @@ class AuthorizationService:
         task_guid: str,
         user: UserModel,
     ) -> bool:
-        human_task = HumanTaskModel.query.filter_by(
+        human_task_query = HumanTaskModel.query.filter_by(
             task_id=task_guid,
             process_instance_id=process_instance_id,
-        ).first()
-        if human_task is None:
-            raise HumanTaskNotFoundError(
-                f"Could find an human task with task guid '{task_guid}' for process instance '{process_instance_id}'"
-            )
+        )
 
-        if human_task.completed:
-            raise HumanTaskAlreadyCompletedError(
-                f"Human task with task guid '{task_guid}' for process instance '{process_instance_id}' has already been completed"
+        human_task = human_task_query.filter_by(completed=False).first()
+        if human_task is None:
+            completed_human_task = human_task_query.filter_by(completed=True).first()
+            if completed_human_task is not None:
+                message = (
+                    f"Human task with task guid '{task_guid}' for process instance "
+                    f"'{process_instance_id}' has already been completed"
+                )
+                raise HumanTaskAlreadyCompletedError(message)
+            raise HumanTaskNotFoundError(
+                f"Could find a human task with task guid '{task_guid}' for process instance '{process_instance_id}'"
             )
 
         if user not in human_task.potential_owners:
@@ -443,8 +452,6 @@ class AuthorizationService:
         name, family_name, given_name, middle_name, nickname, preferred_username,
         profile, picture, website, gender, birthdate, zoneinfo, locale,updated_at, email.
         """
-        new_group_ids: set[int] = set()
-        old_group_ids: set[int] = set()
         user_attributes = {}
 
         if "preferred_username" in user_info:
@@ -468,9 +475,10 @@ class AuthorizationService:
         desired_group_identifiers = None
 
         if current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS"]:
+            groups_claim = current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_GROUPS_CLAIM"]
             desired_group_identifiers = []
-            if "groups" in user_info:
-                desired_group_identifiers = user_info["groups"]
+            if groups_claim in user_info:
+                desired_group_identifiers = user_info[groups_claim]
 
         for field_index, tenant_specific_field in enumerate(
             current_app.config["SPIFFWORKFLOW_BACKEND_OPEN_ID_TENANT_SPECIFIC_FIELDS"]
@@ -485,6 +493,8 @@ class AuthorizationService:
             .filter(UserModel.service_id == user_attributes["service_id"])
             .first()
         )
+        if user_model is None and user_attributes.get("email"):
+            user_model = UserModel.query.filter(UserModel.email == user_attributes["email"]).order_by(UserModel.id).first()
         if user_model is None:
             current_app.logger.debug("create_user in login_return")
             user_model = UserService().create_user(**user_attributes)
@@ -503,22 +513,15 @@ class AuthorizationService:
         if desired_group_identifiers is not None:
             if not isinstance(desired_group_identifiers, list):
                 current_app.logger.error(  # type: ignore
-                    f"Invalid groups property in token: {desired_group_identifiers}.If groups is specified, it must be a list"
+                    f"Invalid {groups_claim} property in token: {desired_group_identifiers}. "
+                    "If the configured groups claim is specified, it must be a list"
                 )
+                desired_group_identifiers = None
             else:
                 for desired_group_identifier in desired_group_identifiers:
-                    new_group = UserService.add_user_to_group_by_group_identifier(
+                    UserService.add_user_to_group_by_group_identifier(
                         user_model, desired_group_identifier, source_is_open_id=True
                     )
-                    if new_group is not None:
-                        new_group_ids.add(new_group.id)
-                group_ids_to_remove_from_user = [
-                    item.id for item in user_model.groups if item.identifier not in desired_group_identifiers
-                ]
-                for group_id in group_ids_to_remove_from_user:
-                    if group_id != current_app.config["SPIFFWORKFLOW_BACKEND_DEFAULT_USER_GROUP"]:
-                        old_group_ids.add(group_id)
-                        UserService.remove_user_from_group(user_model, group_id)
 
         # this may eventually get too slow.
         # when it does, be careful about backgrounding, because
@@ -526,7 +529,26 @@ class AuthorizationService:
         # we are also a little apprehensive about pre-creating users
         # before the user signs in, because we won't know things like
         # the external service user identifier.
-        cls.import_permissions_from_yaml_file(user_model)
+        added_permissions = cls.import_permissions_from_yaml_file(user_model)
+
+        if desired_group_identifiers is not None:
+            # OIDC and permissions.yaml can both be authoritative for a user's
+            # groups. Reconcile only after both sources have added their desired
+            # memberships so a YAML-managed assignment is not deleted and
+            # recreated on every sign-in.
+            effective_group_identifiers = set(desired_group_identifiers)
+            effective_group_identifiers.update(
+                assignment["group_identifier"] for assignment in added_permissions["user_to_group_identifiers"]
+            )
+            default_group_identifier = current_app.config["SPIFFWORKFLOW_BACKEND_DEFAULT_USER_GROUP"]
+            if default_group_identifier:
+                effective_group_identifiers.add(default_group_identifier)
+
+            group_ids_to_remove_from_user = [
+                group.id for group in user_model.groups if group.identifier not in effective_group_identifiers
+            ]
+            for group_id in group_ids_to_remove_from_user:
+                UserService.remove_user_from_group(user_model, group_id)
 
         # Refresh the groups relationship to get the latest from the database
         db.session.expire(user_model, ["groups"])
@@ -616,6 +638,9 @@ class AuthorizationService:
 
         permissions_to_assign.append(PermissionToAssign(permission="read", target_uri="/process-instances/report-metadata"))
         permissions_to_assign.append(PermissionToAssign(permission="read", target_uri="/process-instances/find-by-id/*"))
+        permissions_to_assign.append(
+            PermissionToAssign(permission="read", target_uri="/process-instances/unique-milestone-names")
+        )
 
         permissions_to_assign.append(PermissionToAssign(permission="read", target_uri="/script-assist/enabled"))
         permissions_to_assign.append(PermissionToAssign(permission="create", target_uri="/script-assist/process-message"))
@@ -811,15 +836,18 @@ class AuthorizationService:
         permissions_to_assign = cls.explode_permissions(permission_without_deny, target)
         permission_assignments = []
         for permission_to_assign in permissions_to_assign:
-            permission_target = cls.find_or_create_permission_target(permission_to_assign.target_uri)
+            permission_target = cls.find_or_create_permission_target(permission_to_assign.target_uri, commit=False)
             permission_assignments.append(
                 cls.create_permission_for_principal(
                     principal=group.principal,
                     permission_target=permission_target,
                     permission=permission_to_assign.permission,
                     grant_type=grant_type,
+                    commit=False,
                 )
             )
+        # one commit for the whole batch instead of one per target/assignment
+        db.session.commit()
         return permission_assignments
 
     @classmethod
@@ -838,10 +866,8 @@ class AuthorizationService:
     @classmethod
     def load_permissions_yaml(cls) -> Any:
         if current_app.config["SPIFFWORKFLOW_BACKEND_PERMISSIONS_FILE_ABSOLUTE_PATH"] is None:
-            raise (
-                PermissionsFileNotSetError(
-                    "SPIFFWORKFLOW_BACKEND_PERMISSIONS_FILE_ABSOLUTE_PATH needs to be set in order to import permissions"
-                )
+            raise PermissionsFileNotSetError(
+                "SPIFFWORKFLOW_BACKEND_PERMISSIONS_FILE_ABSOLUTE_PATH needs to be set in order to import permissions"
             )
 
         with open(current_app.config["SPIFFWORKFLOW_BACKEND_PERMISSIONS_FILE_ABSOLUTE_PATH"]) as file:

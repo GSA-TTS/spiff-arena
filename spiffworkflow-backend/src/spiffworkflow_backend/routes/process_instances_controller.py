@@ -7,6 +7,7 @@ from spiffworkflow_backend.helpers.spiff_enum import ProcessInstanceExecutionMod
 
 import json
 from typing import Any
+from typing import cast
 
 import flask.wrappers
 from flask import current_app
@@ -28,33 +29,29 @@ from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.models.bpmn_process import BpmnProcessModel
 from spiffworkflow_backend.models.bpmn_process_definition import BpmnProcessDefinitionModel
 from spiffworkflow_backend.models.db import db
-from spiffworkflow_backend.models.json_data import JsonDataModel  # noqa: F401
+from spiffworkflow_backend.models.json_data import JsonDataModel
 from spiffworkflow_backend.models.process_instance import ProcessInstanceCannotBeDeletedError
 from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.process_instance_queue import ProcessInstanceQueueModel
+from spiffworkflow_backend.models.process_instance_report import FilterValue
 from spiffworkflow_backend.models.process_instance_report import ProcessInstanceReportModel
 from spiffworkflow_backend.models.process_instance_report import Report
 from spiffworkflow_backend.models.process_model import ProcessModelInfo
-from spiffworkflow_backend.models.reference_cache import ReferenceCacheModel
-from spiffworkflow_backend.models.reference_cache import ReferenceNotFoundError
 from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.models.task_definition import TaskDefinitionModel
 from spiffworkflow_backend.routes.process_api_blueprint import _find_process_instance_by_id_or_raise
 from spiffworkflow_backend.routes.process_api_blueprint import _find_process_instance_for_me_or_raise
-from spiffworkflow_backend.routes.process_api_blueprint import _get_process_model
 from spiffworkflow_backend.routes.process_api_blueprint import _get_process_model_for_instantiation
 from spiffworkflow_backend.services.authorization_service import AuthorizationService
 from spiffworkflow_backend.services.error_handling_service import ErrorHandlingService
-from spiffworkflow_backend.services.git_service import GitCommandError
-from spiffworkflow_backend.services.git_service import GitService
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceIsAlreadyLockedError
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceIsNotEnqueuedError
 from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceQueueService
 from spiffworkflow_backend.services.process_instance_report_service import ProcessInstanceReportService
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
-from spiffworkflow_backend.services.process_instance_tmp_service import ProcessInstanceTmpService
-from spiffworkflow_backend.services.process_model_service import ProcessModelService
+from spiffworkflow_backend.services.process_instance_event_service import ProcessInstanceEventService
+from spiffworkflow_backend.services.model_sources import ModelSources
 from spiffworkflow_backend.services.task_service import TaskService
 from spiffworkflow_backend.utils.api_logging import log_api_interaction
 
@@ -74,8 +71,6 @@ def process_instance_run_deprecated(
     force_run: bool = False,
     execution_mode: str | None = None,
 ) -> flask.wrappers.Response:
-    from typing import cast
-
     return cast(
         flask.wrappers.Response,
         process_instance_run(
@@ -97,7 +92,7 @@ def process_instance_run(
     process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
     _process_instance_run(process_instance, force_run=force_run, execution_mode=execution_mode)
 
-    process_instance_api = ProcessInstanceService.processor_to_process_instance_api(process_instance)
+    process_instance_api = ProcessInstanceService.runtime_to_process_instance_api(process_instance)
     process_instance_api_dict = process_instance_api.to_dict()
     process_instance_api_dict["process_model_uses_queued_execution"] = queue_enabled_for_process_model()
     return make_response(jsonify(process_instance_api_dict), 200)
@@ -112,8 +107,8 @@ def process_instance_terminate(
     try:
         with ProcessInstanceQueueService.dequeued(process_instance):
             ProcessInstanceMigrator.run(process_instance)
-            processor = ProcessInstanceProcessor(process_instance)
-            processor.terminate()
+            runtime = ProcessInstanceRuntime(process_instance)
+            runtime.terminate()
     except (
         ProcessInstanceIsNotEnqueuedError,
         ProcessInstanceIsAlreadyLockedError,
@@ -129,11 +124,11 @@ def process_instance_suspend(
     modified_process_model_identifier: str,
 ) -> flask.wrappers.Response:
     process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
-    processor = ProcessInstanceProcessor(process_instance)
+    runtime = ProcessInstanceRuntime(process_instance)
 
     try:
         with ProcessInstanceQueueService.dequeued(process_instance):
-            processor.suspend()
+            runtime.suspend()
     except (
         ProcessInstanceIsNotEnqueuedError,
         ProcessInstanceIsAlreadyLockedError,
@@ -149,11 +144,11 @@ def process_instance_resume(
     modified_process_model_identifier: str,
 ) -> flask.wrappers.Response:
     process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
-    processor = ProcessInstanceProcessor(process_instance)
+    runtime = ProcessInstanceRuntime(process_instance)
 
     try:
         with ProcessInstanceQueueService.dequeued(process_instance):
-            processor.resume()
+            runtime.resume()
         # the process instance will be in waiting since we just successfully resumed it.
         # tell the celery worker to get busy.
         queue_process_instance_if_appropriate(process_instance)
@@ -558,7 +553,7 @@ def process_instance_reset(
 ) -> flask.wrappers.Response:
     """Reset a process instance to a particular step."""
     process_instance = _find_process_instance_by_id_or_raise(process_instance_id)
-    ProcessInstanceProcessor.reset_process(process_instance, to_task_guid)
+    ProcessInstanceRuntime.reset_process(process_instance, to_task_guid)
     return make_response(jsonify({"ok": True}), 200)
 
 
@@ -578,7 +573,9 @@ def process_instance_check_can_migrate(
         ProcessInstanceService.check_process_instance_can_be_migrated(
             process_instance, target_bpmn_process_hash=target_bpmn_process_hash
         )
-    except (ProcessInstanceMigrationNotSafeError, ProcessInstanceMigrationUnnecessaryError) as exception:
+    except (ProcessInstanceMigrationNotSafeError, ProcessInstanceMigrationUnnecessaryError, ApiError) as exception:
+        # ApiError is included so a model-source provider rejecting migration for this
+        # instance reports can_migrate: false like other unavailability checks.
         return_dict["can_migrate"] = False
         return_dict["exception_class"] = exception.__class__.__name__
     return make_response(jsonify(return_dict), 200)
@@ -651,9 +648,38 @@ def send_bpmn_event(
         )
 
 
-def unique_milestone_name_list() -> Response:
-    results = ProcessInstanceModel.query.with_entities(ProcessInstanceModel.last_milestone_bpmn_name).distinct().all()
-    values = [row[0] for row in results if row[0] is not None and row[0] != ""]
+def unique_milestone_name_list(
+    with_relation_to_me: bool = False,
+    process_model_identifier: str | None = None,
+) -> Response:
+    filters: list[FilterValue] = []
+    if process_model_identifier:
+        filters.append({"field_name": "process_model_identifier", "field_value": process_model_identifier})
+
+    has_process_instance_read_permission = False
+    if process_model_identifier:
+        modified_process_model_identifier = ProcessModelInfo.modify_process_identifier_for_path_param(process_model_identifier)
+        has_process_instance_read_permission = AuthorizationService.user_has_permission(
+            user=g.user,
+            permission="read",
+            target_uri=f"/process-instances/{modified_process_model_identifier}/*",
+        )
+
+    if not has_process_instance_read_permission:
+        has_process_instance_read_permission = AuthorizationService.user_has_permission(
+            user=g.user,
+            permission="read",
+            target_uri="/process-instances",
+        )
+
+    should_scope_to_requesting_user = with_relation_to_me or not has_process_instance_read_permission
+    if should_scope_to_requesting_user:
+        filters.append({"field_name": "with_relation_to_me", "field_value": True})
+
+    values = ProcessInstanceReportService.unique_milestone_names(
+        filters=filters,
+        user=g.user if should_scope_to_requesting_user else None,
+    )
     return make_response(jsonify(values), 200)
 
 
@@ -661,8 +687,8 @@ def _send_bpmn_event(process_instance: ProcessInstanceModel, body: dict) -> Resp
     try:
         with ProcessInstanceQueueService.dequeued(process_instance):
             ProcessInstanceMigrator.run(process_instance)
-            processor = ProcessInstanceProcessor(process_instance)
-            processor.send_bpmn_event(body)
+            runtime = ProcessInstanceRuntime(process_instance)
+            runtime.send_bpmn_event(body)
     except (
         ProcessInstanceIsNotEnqueuedError,
         ProcessInstanceIsAlreadyLockedError,
@@ -670,7 +696,7 @@ def _send_bpmn_event(process_instance: ProcessInstanceModel, body: dict) -> Resp
         ErrorHandlingService.handle_error(process_instance, e)
         raise e
 
-    task = ProcessInstanceService.spiff_task_to_api_task(processor, processor.next_task())
+    task = ProcessInstanceService.spiff_task_to_api_task(runtime, runtime.next_task())
     return make_response(jsonify(task), 200)
 
 
@@ -680,41 +706,16 @@ def _get_process_instance(
     process_identifier: str | None = None,
 ) -> flask.wrappers.Response:
     process_model_identifier = modified_process_model_identifier.replace(":", "/")
+    if process_model_identifier != process_instance.process_model_identifier:
+        raise ApiError(
+            "process_instance_cannot_be_found",
+            "The instance does not belong to the requested model.",
+            status_code=404,
+        )
 
-    process_model_with_diagram = None
-    name_of_file_with_diagram = None
-    if process_identifier:
-        spec_reference = ReferenceCacheModel.basic_query().filter_by(identifier=process_identifier, type="process").first()
-        if spec_reference is None:
-            raise ReferenceNotFoundError(f"Could not find given process identifier in the cache: {process_identifier}")
-
-        process_model_with_diagram = ProcessModelService.get_process_model(spec_reference.relative_location)
-        name_of_file_with_diagram = spec_reference.file_name
-        process_instance.process_model_with_diagram_identifier = process_model_with_diagram.id
-    else:
-        try:
-            process_model_with_diagram = _get_process_model(process_model_identifier)
-            if process_model_with_diagram.primary_file_name:
-                name_of_file_with_diagram = process_model_with_diagram.primary_file_name
-        except Exception as ex:
-            current_app.logger.warning(f"Failed to retrieve process model for diagram: {ex}")
-            process_instance.bpmn_xml_file_contents_retrieval_error = "Failed to retrieve process model for diagram."
-
-    if process_model_with_diagram and name_of_file_with_diagram:
-        bpmn_xml_file_contents = None
-        try:
-            bpmn_xml_file_contents = GitService.get_file_contents_for_revision_if_git_revision(
-                process_model=process_model_with_diagram,
-                revision=process_instance.bpmn_version_control_identifier,
-                file_name=name_of_file_with_diagram,
-            )
-        except GitCommandError as ex:
-            current_app.logger.warning(f"Failed to retrieve BPMN XML from git: {ex}")
-            process_instance.bpmn_xml_file_contents_retrieval_error = "Failed to retrieve BPMN XML from version control."
-        process_instance.bpmn_xml_file_contents = bpmn_xml_file_contents
-
-    process_instance_as_dict = process_instance.serialized_with_metadata()
-    return make_response(jsonify(process_instance_as_dict), 200)
+    result = process_instance.serialized_with_metadata()
+    result.update(ModelSources.for_instance(process_instance).diagram_payload(process_instance, process_identifier))
+    return make_response(jsonify(result), 200)
 
 
 def _process_instance_run(
@@ -729,17 +730,17 @@ def _process_instance_run(
             status_code=400,
         )
 
-    processor = None
+    runtime = None
     try:
         if force_run is True:
-            ProcessInstanceTmpService.add_event_to_process_instance(process_instance, "process_instance_force_run")
+            ProcessInstanceEventService.add_event_to_process_instance(process_instance, "process_instance_force_run")
         if not queue_process_instance_if_appropriate(
             process_instance, execution_mode=execution_mode
-        ) and not ProcessInstanceTmpService.is_enqueued_to_run_in_the_future(process_instance):
+        ) and not ProcessInstanceQueueService.is_enqueued_to_run_in_the_future(process_instance):
             execution_strategy_name = None
             if execution_mode == ProcessInstanceExecutionMode.synchronous.value:
                 execution_strategy_name = "greedy"
-            processor, _ = ProcessInstanceService.run_process_instance_with_processor(
+            runtime, _ = ProcessInstanceService.run_process_instance_with_runtime(
                 process_instance, execution_strategy_name=execution_strategy_name
             )
     except (
@@ -753,8 +754,8 @@ def _process_instance_run(
         ErrorHandlingService.handle_error(process_instance, e)
         # FIXME: this is going to point someone to the wrong task - it's misinformation for errors in sub-processes.
         # we need to recurse through all last tasks if the last task is a call activity or subprocess.
-        if processor is not None:
-            task = processor.bpmn_process_instance.last_task
+        if runtime is not None:
+            task = runtime.bpmn_process_instance.last_task
             raise ApiError.from_task(
                 error_code="unknown_exception",
                 message=f"An unknown error occurred. Original error: {e}",

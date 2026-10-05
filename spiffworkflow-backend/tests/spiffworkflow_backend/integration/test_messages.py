@@ -1,10 +1,14 @@
+from unittest.mock import patch
+
 import pytest
 from flask import Flask
 from flask import g
 from starlette.testclient import TestClient
 
 from spiffworkflow_backend.exceptions.api_error import ApiError
+from spiffworkflow_backend.helpers.spiff_enum import ProcessInstanceExecutionMode
 from spiffworkflow_backend.models.message_instance import MessageInstanceModel
+from spiffworkflow_backend.models.message_model import MessageModel
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.routes.messages_controller import message_send
 from spiffworkflow_backend.services.data_setup_service import DataSetupService
@@ -13,6 +17,34 @@ from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
 
 
 class TestMessages(BaseTest):
+    def test_asynchronous_message_start_returns_reserved_process_instance(
+        self,
+        app: Flask,
+        with_db_and_bpmn_file_cleanup: None,
+    ) -> None:
+        load_test_spec(
+            "test_group/simple-message-receive",
+            process_model_source_directory="simple-message-send-receive",
+            bpmn_file_name="message_start_event.bpmn",
+        )
+        g.user = self.find_or_create_user()
+
+        with (
+            self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_CELERY_ENABLED", True),
+            patch("spiffworkflow_backend.services.message_service.queue_message_start_process_instance"),
+        ):
+            response = message_send(
+                "message_one",
+                {"payload": "hello"},
+                ProcessInstanceExecutionMode.asynchronous.value,
+            )
+
+        assert response.status_code == 200
+        response_json = response.json
+        assert response_json["process_instance"]["id"] is not None
+        assert response_json["process_instance"]["status"] == "not_started"
+        assert response_json["task_data"] == {}
+
     def test_get_process_model_for_message(
         self,
         app: Flask,
@@ -209,9 +241,61 @@ class TestMessages(BaseTest):
         }
 
         for message in messages:
+            assert isinstance(message["id"], int)
             assert message["identifier"] in expected_message_identifiers
             assert message["location"] == "bob"
             assert message["schema"] == {}
 
             cp = {p["identifier"]: p["retrieval_expression"] for p in message["correlation_properties"]}
             assert cp == expected_correlation_properties[message["identifier"]]
+
+    def test_process_group_update_rejects_existing_message_id_at_different_location(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+        with_super_admin_user: UserModel,
+    ) -> None:
+        self.create_process_group("order")
+        self.create_process_group("order/request-for-information")
+
+        process_group = {
+            "display_name": "Order",
+            "messages": {
+                "request-for-information-received": {
+                    "schema": {},
+                }
+            },
+        }
+        response = client.put(
+            "/v1.0/process-groups/order",
+            headers=self.logged_in_headers(with_super_admin_user, additional_headers={"Content-Type": "application/json"}),
+            json=process_group,
+        )
+        assert response.status_code == 200
+
+        original_message = MessageModel.query.filter_by(
+            identifier="request-for-information-received",
+            location="order",
+        ).one()
+        original_message_id = original_message.id
+
+        response = client.put(
+            "/v1.0/process-groups/order:request-for-information",
+            headers=self.logged_in_headers(with_super_admin_user, additional_headers={"Content-Type": "application/json"}),
+            json={
+                "display_name": "Request For Information",
+                "messages": {
+                    "request-for-information-received": {
+                        "id": original_message_id,
+                        "location": "order/request-for-information",
+                        "schema": {},
+                    }
+                },
+            },
+        )
+        assert response.status_code == 400
+
+        original_message = MessageModel.query.filter_by(id=original_message_id).one()
+        assert original_message.identifier == "request-for-information-received"
+        assert original_message.location == "order"

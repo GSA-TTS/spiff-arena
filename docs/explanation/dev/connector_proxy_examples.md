@@ -139,43 +139,9 @@ POST /v1/do/http/HeadRequest
 
 ## Response Examples
 
-### Standard Response Envelope
-
-All commands return a response envelope with this structure:
-
-```json
-{
-  "command_response": {
-    "body": {},
-    "mimetype": "application/json",
-    "http_status": 200
-  },
-  "command_response_version": 2,
-  "error": null,
-  "spiff__logs": []
-}
-```
-
-### Successful JSON Response
-
-When the upstream service returns JSON with a `200 OK` status:
-
-```json
-{
-  "command_response": {
-    "body": {
-      "id": 123,
-      "name": "example item",
-      "status": "active"
-    },
-    "mimetype": "application/json",
-    "http_status": 200
-  },
-  "command_response_version": 2,
-  "error": null,
-  "spiff__logs": []
-}
-```
+Responses use the protocol's
+[version 2 envelope](../../reference/api/connector_proxy_protocol.md#version-2-response-envelope).
+The examples below show behavior specific to the async-http implementation.
 
 ### Non-JSON Response (Raw Text)
 
@@ -219,30 +185,6 @@ When an error occurs:
 }
 ```
 
-### HTTP 202 Accepted Response (Long-Running Tasks)
-
-When a service task initiates a long-running operation:
-
-```json
-{
-  "command_response": {
-    "body": {
-      "task_id": "abc-123",
-      "status": "processing"
-    },
-    "mimetype": "application/json",
-    "http_status": 202
-  },
-  "command_response_version": 2,
-  "error": null,
-  "spiff__logs": []
-}
-```
-
-> **Note:** When a connector proxy returns a `202 (Accepted)` response, SpiffWorkflow will leave the service task in a **WAITING** state. See [Long-Running Service Tasks](../../how_to_guides/building_diagrams/long_running_service_tasks) for more details.
-
----
-
 ## Response Parsing Behavior
 
 - If the upstream response `Content-Type` includes `application/json`, the proxy parses JSON into `command_response.body`
@@ -258,14 +200,16 @@ When a service task initiates a long-running operation:
 
 When SpiffWorkflow invokes a service task, it automatically includes a `spiff__callback_url` parameter. If your service needs to process the request asynchronously:
 
-1. **Return a 202 response** to indicate the task is accepted but not yet complete
-2. **Call the callback URL later** when processing is done
+1. Return an accepted response that satisfies the protocol's
+   [asynchronous completion](../../reference/api/connector_proxy_protocol.md#asynchronous-completion)
+   rules.
+2. Call the callback URL later with credentials authorized to update the Arena
+   process instance.
 
 ### Callback Request Format
 
-When your service is ready to complete the task, send a **PUT** request to the `spiff__callback_url` using the connector proxy response envelope format:
-
-> **Important:** The `command_response.body` field is **required** in all callback requests. Omitting this structure will result in an `invalid_callback_body` error from SpiffWorkflow.
+When your service is ready to complete the task successfully, send a **PUT**
+request to the `spiff__callback_url` with a `command_response.body`:
 
 ```text
 PUT <spiff__callback_url>
@@ -287,6 +231,9 @@ Content-Type: application/json
 }
 ```
 
-The `command_response.body` field contains your actual result data. SpiffWorkflow extracts this value and stores it in the service task's configured result variable.
-
-See [Long-Running Service Tasks](../../how_to_guides/building_diagrams/long_running_service_tasks) for complete documentation.
+SpiffWorkflow stores `command_response.body` in the service task's configured
+result variable. For error callbacks, authorization, and retry behavior, see
+the protocol's [asynchronous completion](../../reference/api/connector_proxy_protocol.md#asynchronous-completion)
+section. See
+[Long-Running Service Tasks](../../how_to_guides/building_diagrams/long_running_service_tasks)
+for process-model configuration.

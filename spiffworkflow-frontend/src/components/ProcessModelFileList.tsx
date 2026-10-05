@@ -17,8 +17,7 @@ import {
   TableContainer,
   IconButton,
 } from '@mui/material';
-import { Can } from '@casl/react';
-import { PureAbility } from '@casl/ability';
+import { Can, type AppAbility } from '../contexts/Can';
 import ConfirmIconButton from './ConfirmIconButton';
 import ProcessModelTestRun from './ProcessModelTestRun';
 import { ProcessFile } from '../interfaces';
@@ -28,7 +27,7 @@ import useAPIError from '../hooks/UseApiError';
 
 interface ProcessModelFileListProps {
   processModel: any;
-  ability: PureAbility;
+  ability: AppAbility;
   targetUris: any;
   modifiedProcessModelId: string;
   onDeleteFile: (fileName: string) => void;
@@ -115,9 +114,10 @@ export default function ProcessModelFileList({
         >
           <SpiffTooltip title={`${actionWord} ${t('file')}`} placement="top">
             <IconButton
+              component={Link}
               aria-label={`${actionWord} ${t('file')}`}
               data-testid={`edit-file-${processModelFile.name.replace('.', '-')}`}
-              href={editUrl}
+              to={editUrl}
             >
               {icon}
             </IconButton>
@@ -242,7 +242,7 @@ export default function ProcessModelFileList({
   }
 
   return (
-    <TableContainer>
+    <TableContainer tabIndex={0}>
       <Table size="medium" className="process-model-file-table">
         <TableHead>
           <TableRow>

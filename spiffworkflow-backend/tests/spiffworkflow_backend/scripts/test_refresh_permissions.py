@@ -1,7 +1,8 @@
 import pytest
 from flask.app import Flask
 
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.authorization_service import AuthorizationService
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.workflow_execution_service import WorkflowExecutionServiceError
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
 from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
@@ -12,7 +13,11 @@ class TestRefreshPermissions(BaseTest):
         self,
         app: Flask,
         with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # Authorization is the subject here; permission-file parsing is covered
+        # by AuthorizationService's own tests.
+        monkeypatch.setattr(AuthorizationService, "load_permissions_yaml", lambda: {})
         basic_user = self.find_or_create_user("basic_user")
         privileged_user = self.find_or_create_user("privileged_user")
         self.add_permissions_to_user(
@@ -26,13 +31,13 @@ class TestRefreshPermissions(BaseTest):
         )
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=basic_user)
 
-        processor = ProcessInstanceProcessor(process_instance)
+        runtime = ProcessInstanceRuntime(process_instance)
 
         with pytest.raises(WorkflowExecutionServiceError) as exception:
-            processor.do_engine_steps(save=True)
-            assert "ScriptUnauthorizedForUserError" in str(exception)
+            runtime.do_engine_steps(save=True)
+        assert "ScriptUnauthorizedForUserError" in str(exception.value)
 
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=privileged_user)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
         assert process_instance.status == "complete"

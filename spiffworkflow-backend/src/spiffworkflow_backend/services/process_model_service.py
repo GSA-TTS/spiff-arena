@@ -16,6 +16,7 @@ from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.exceptions.process_entity_not_found_error import ProcessEntityNotFoundError
 from spiffworkflow_backend.interfaces import ProcessGroupLite
 from spiffworkflow_backend.interfaces import ProcessGroupLitesWithCache
+from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.file import File
 from spiffworkflow_backend.models.permission_assignment import PermitDeny
 from spiffworkflow_backend.models.process_group import PROCESS_GROUP_SUPPORTED_KEYS_FOR_DISK_SERIALIZATION
@@ -25,7 +26,6 @@ from spiffworkflow_backend.models.process_model import PROCESS_MODEL_SUPPORTED_K
 from spiffworkflow_backend.models.process_model import ProcessModelInfo
 from spiffworkflow_backend.models.reference_cache import Reference
 from spiffworkflow_backend.models.reference_cache import ReferenceCacheModel
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.services.authorization_service import AuthorizationService
 from spiffworkflow_backend.services.file_system_service import FileSystemService
@@ -130,30 +130,32 @@ class ProcessModelService(FileSystemService):
         cls.write_json_file(json_path, full_json_data)
 
     @classmethod
-    def extract_metadata(cls, process_model_identifier: str, current_data: dict[str, Any]) -> dict[str, Any]:
-        # we are currently not getting the metadata extraction paths based on the version in git from the process instance.
-        # it would make sense to do that if the shell-out-to-git performance cost was not too high.
-        # we also discussed caching this information in new database tables. something like:
-        #   process_model_version
-        #     id
-        #     process_model_identifier
-        #     git_hash
-        #     display_name
-        #     notification_type
-        #   metadata_extraction
-        #     id
-        #     extraction_key
-        #     extraction_path
-        #   metadata_extraction_process_model_version
-        #     process_model_version_id
-        #     metadata_extraction_id
-        process_model_info = cls.get_process_model(process_model_identifier)
-        metadata_extraction_paths = process_model_info.metadata_extraction_paths
-        if metadata_extraction_paths is None:
-            return {}
-        if len(metadata_extraction_paths) <= 0:
-            return {}
-        return process_model_info.__class__.extract_metadata(current_data, process_model_info.metadata_extraction_paths or [])
+    def extract_metadata(
+        cls,
+        process_model_identifier: str,
+        current_data: dict[str, Any],
+        process_instance: ProcessInstanceModel | None = None,
+    ) -> dict[str, Any]:
+        process_model_info = (
+            cls.get_process_model_for_instance(process_instance)
+            if process_instance is not None
+            else cls.get_process_model(process_model_identifier)
+        )
+        return ProcessModelInfo.extract_metadata(current_data, process_model_info.metadata_extraction_paths or [])
+
+    @classmethod
+    def get_process_model_for_instance(cls, process_instance: ProcessInstanceModel) -> ProcessModelInfo:
+        """Resolve configuration from the instance's model source.
+
+        Looks up a registered provider at runtime rather than importing the
+        higher-level model source facade to keep service layering one-directional.
+        """
+        provider = current_app.extensions.get("model_sources")
+        files = provider.open(db.session, process_instance) if provider is not None and process_instance.id is not None else None
+        if files is not None:
+            config = json.loads(files.read(f"{process_instance.process_model_identifier}/process_model.json"))
+            return ProcessModelInfo.from_dict({**config, "id": process_instance.process_model_identifier})
+        return cls.get_process_model(process_instance.process_model_identifier)
 
     @classmethod
     def save_process_model(cls, process_model: ProcessModelInfo) -> None:
@@ -273,6 +275,17 @@ class ProcessModelService(FileSystemService):
         if cls.is_process_model(model_path):
             return cls.get_process_model_from_relative_path(process_model_id)
         raise ProcessEntityNotFoundError("process_model_not_found")
+
+    @classmethod
+    def get_process_model_or_raise_api_error(cls, process_model_id: str) -> ProcessModelInfo:
+        try:
+            return cls.get_process_model(process_model_id)
+        except ProcessEntityNotFoundError as exception:
+            raise ApiError(
+                error_code="process_model_cannot_be_found",
+                message=f"Process model cannot be found: {process_model_id}",
+                status_code=400,
+            ) from exception
 
     @classmethod
     def get_process_model_files(cls, process_model: ProcessModelInfo) -> list[File]:
@@ -728,6 +741,23 @@ class ProcessModelService(FileSystemService):
         return process_group
 
     @classmethod
+    def process_group_json_path(cls, process_group_id: str) -> str:
+        """Get the path to a process group's JSON file."""
+        return os.path.join(cls.full_path_from_id(process_group_id), cls.PROCESS_GROUP_JSON_FILE)
+
+    @classmethod
+    def read_process_group_json(cls, process_group_id: str) -> str:
+        """Read the contents of a process group's JSON file."""
+        with open(cls.process_group_json_path(process_group_id)) as process_group_file:
+            return process_group_file.read()
+
+    @classmethod
+    def restore_process_group_json(cls, process_group_id: str, contents: str) -> None:
+        """Restore a process group's JSON file from backup contents."""
+        with open(cls.process_group_json_path(process_group_id), "w") as process_group_file:
+            process_group_file.write(contents)
+
+    @classmethod
     def process_group_move(cls, original_process_group_id: str, new_location: str) -> ProcessGroup:
         original_group_path = cls.full_path_from_id(original_process_group_id)
         _, original_base_group_id = os.path.split(original_group_path)
@@ -776,12 +806,20 @@ class ProcessModelService(FileSystemService):
 
     @classmethod
     def __scan_process_groups(cls, process_group_id: str | None = None) -> list[ProcessGroup]:
-        if not os.path.exists(FileSystemService.root_path()):
-            return []  # Nothing to scan yet.  There are no files.
+        root_path = os.path.abspath(FileSystemService.root_path())
+        scan_path = root_path
         if process_group_id is not None:
-            scan_path = os.path.join(FileSystemService.root_path(), process_group_id)
-        else:
-            scan_path = FileSystemService.root_path()
+            scan_path = os.path.abspath(os.path.join(root_path, process_group_id))
+            resolved_root_path = os.path.realpath(root_path)
+            resolved_scan_path = os.path.realpath(scan_path)
+            try:
+                if os.path.commonpath([resolved_scan_path, resolved_root_path]) != resolved_root_path:
+                    return []
+            except ValueError:
+                return []
+
+        if not os.path.isdir(scan_path):
+            return []  # Nothing to scan yet.  There are no files.
 
         with os.scandir(scan_path) as directory_items:
             process_groups = []

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Button, Box } from '@mui/material';
+import { Button, Box, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -27,6 +27,7 @@ import ProcessInstanceRun from './ProcessInstanceRun';
 import ConfirmButton from './ConfirmButton';
 import { TASK_METADATA } from '../config';
 import { spiffBpmnApiService } from '../services/SpiffBpmnApiService';
+import DateAndTimeService from '../services/DateAndTimeService';
 
 type OwnProps = {
   modifiedProcessModelId: string;
@@ -36,6 +37,7 @@ type OwnProps = {
   diagramXML?: string | null;
   disableSaveButton?: boolean;
   fileName?: string;
+  hasUnsavedChanges?: boolean;
   isPrimaryFile?: boolean;
   processModel?: ProcessModel | null;
   onCallActivityOverlayClick?: (..._args: any[]) => any;
@@ -56,10 +58,12 @@ type OwnProps = {
   onServiceTasksRequested?: (..._args: any[]) => any;
   onSetPrimaryFile?: (..._args: any[]) => any;
   saveDiagram?: (..._args: any[]) => any;
+  saveTooltip?: React.ReactNode;
   tasks?: BasicTask[] | null;
   url?: string;
   navigationStack?: DiagramNavigationItem[];
   onNavigate?: (index: number) => void;
+  lastSaved?: string | null;
 };
 
 export default function ReactDiagramEditor({
@@ -69,6 +73,7 @@ export default function ReactDiagramEditor({
   diagramXML,
   disableSaveButton,
   fileName,
+  hasUnsavedChanges,
   isPrimaryFile,
   processModel,
   onCallActivityOverlayClick,
@@ -90,10 +95,12 @@ export default function ReactDiagramEditor({
   onSetPrimaryFile,
   modifiedProcessModelId,
   saveDiagram,
+  saveTooltip,
   tasks,
   url,
   navigationStack,
   onNavigate,
+  lastSaved,
 }: OwnProps) {
   const bpmnEditorRef = useRef<BpmnEditorRef>(null);
   const [showingReferences, setShowingReferences] = useState(false);
@@ -205,6 +212,33 @@ export default function ReactDiagramEditor({
     return null;
   };
 
+  // Shows the process model author when the current file was last saved to
+  // disk. Renders nothing until there is a valid timestamp (e.g. a brand new,
+  // never-saved file). See issue #1642.
+  const buildLastSavedElement = () => {
+    if (!lastSaved) {
+      return null;
+    }
+    const lastSavedSeconds = Date.parse(lastSaved) / 1000;
+    if (Number.isNaN(lastSavedSeconds)) {
+      return null;
+    }
+    const formattedDateTime =
+      DateAndTimeService.convertSecondsToFormattedDateTime(lastSavedSeconds);
+    if (!formattedDateTime) {
+      return null;
+    }
+    return (
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        data-testid="diagram-last-saved"
+      >
+        {t('diagram_last_saved', { datetime: formattedDateTime })}
+      </Typography>
+    );
+  };
+
   const userActionOptions = () => {
     if (diagramType === 'readonly') {
       return null;
@@ -223,12 +257,16 @@ export default function ReactDiagramEditor({
       <ProcessInstanceRun processModel={processModel} />
     ) : null;
 
+    const lastSavedElement = buildLastSavedElement();
+
     return (
       <DiagramActionBar
         canSave={ability.can('PUT', targetUris.processModelFileShowPath)}
         onSave={handleSave}
         saveDisabled={disableSaveButton}
         saveLabel={t('save')}
+        saveRequiresAttention={hasUnsavedChanges}
+        saveTooltip={saveTooltip}
         canDelete={ability.can('DELETE', targetUris.processModelFileShowPath)}
         deleteButton={deleteButton}
         canSetPrimary={
@@ -239,6 +277,7 @@ export default function ReactDiagramEditor({
         onSetPrimary={handleSetPrimaryFile}
         setPrimaryLabel={t('diagram_set_as_primary_file')}
         referencesButton={getReferencesButton()}
+        lastSavedElement={lastSavedElement}
         processInstanceRun={processInstanceRun}
         activeUserElement={
           ability.can('PUT', targetUris.processModelFileShowPath)
@@ -280,7 +319,16 @@ export default function ReactDiagramEditor({
         data-testid="process-model-file-show"
         data-filename={fileName}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            flex: '1 1 auto',
+            flexWrap: 'wrap',
+            minWidth: 0,
+          }}
+        >
           {navigationStack && onNavigate && (
             <DiagramNavigationBreadcrumbs
               stack={navigationStack}
@@ -299,14 +347,18 @@ export default function ReactDiagramEditor({
               viewXmlLabel={t('diagram_view_xml')}
             />
           )}
+          {diagramControlButtons()}
         </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <div
-            className="diagram-toolbar__right"
-            style={{ position: 'static', transform: 'none' }}
-          >
-            {diagramControlButtons()}
-          </div>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            flex: '0 1 auto',
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+          }}
+        >
           <div
             className="diagram-toolbar__left"
             style={{ position: 'static', padding: 0 }}

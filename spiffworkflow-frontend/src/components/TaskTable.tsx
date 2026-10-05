@@ -115,8 +115,8 @@ export default function TaskTable({
             label={entry.process_model_display_name}
             size="small"
             sx={{
-              bgcolor: '#E0E0E0',
-              color: '#616161',
+              bgcolor: 'action.selected',
+              color: 'text.secondary',
               mb: 1,
               fontWeight: 'normal',
             }}
@@ -135,7 +135,7 @@ export default function TaskTable({
             color="textSecondary"
             sx={{ display: 'flex', alignItems: 'center' }}
             title={
-              DateAndTimeService.convertSecondsToFormattedDateTime(
+              DateAndTimeService.convertSecondsToFormattedDateTimeWithTimezone(
                 entry.created_at_in_seconds,
               ) || '-'
             }
@@ -159,7 +159,7 @@ export default function TaskTable({
             color="textSecondary"
             sx={{ display: 'flex', alignItems: 'center' }}
             title={
-              DateAndTimeService.convertSecondsToFormattedDateTime(
+              DateAndTimeService.convertSecondsToFormattedDateTimeWithTimezone(
                 entry.updated_at_in_seconds,
               ) || '-'
             }
@@ -186,6 +186,7 @@ export default function TaskTable({
     return (
       <TableContainer
         component={Paper}
+        tabIndex={0}
         sx={{
           bgcolor: 'background.paper',
           boxShadow: 'none',

@@ -6,12 +6,13 @@
 👇 Throughout this step-by-step guide, we will walk you through key components of SpiffWorkflow, ensuring that you have a clear understanding of how to use the platform effectively.
 ```
 
-## 🚀 Getting Started with SpiffArena
+## 🚀 Getting Started with Spiff Arena
 
-Sartography, the company that shepherds the SpiffWorkflow and SpiffArena projects, provides users with a platform to explore workflow concepts through a collection of examples, diagrams, and workflows.
+Sartography, the company that shepherds the SpiffWorkflow and Spiff Arena projects, provides users with a platform to explore workflow concepts through a collection of examples, diagrams, and workflows.
 Users can interact with pre-built models, make modifications, and visualize process flows.
 
-## How to Log in to SpiffArena
+(quickstart-login)=
+## How to Log in to Spiff Arena
 
 ```{image} /images/Login.png
 :alt: Login Screen
@@ -20,17 +21,17 @@ Users can interact with pre-built models, make modifications, and visualize proc
 :align: right
 ```
 
-To begin your journey with SpiffArena, open your web browser and navigate to the SpiffArena website (currently spiffdemo.org).
+To begin your journey with Spiff Arena, open your web browser and navigate to the Spiff Arena website (currently spiffdemo.org).
 
 On the login screen, you will find the option to log in using Single Sign-On.
 Click the Single Sign-On button and select your preferred login method, such as using your Gmail account.
 
 ```{admonition} Note:
 Stay tuned as we expand our sign-on options beyond Gmail.
-More ways to access SpiffArena are coming your way!
+More ways to access Spiff Arena are coming your way!
 ```
 
-## How to Navigate through SpiffArena
+## How to Navigate through Spiff Arena
 
 This guide walks you through the updated SpiffWorkflow interface, highlighting its core sections, how to interact with workflows, and where to find key features for an improved user experience.
 
@@ -166,6 +167,7 @@ In the tests, we have the following fields:
 
 By submitting these details, a BPMN unit test is automatically generated, which can be stored and reused to validate future changes to the same workflow.
 
+(quickstart-create-process)=
 ## How to Create a BPMN Process
 
 With SpiffWorkflow, you can easily initiate a new process instance.
@@ -383,24 +385,23 @@ Within the "Process Instances" section, you'll see a list of all the instances f
 
 If you are on a home page, you can navigate to the table you wish to filter.
 
-Look for the black funnel icon in the top right-hand corner above the table and click on the icon.
-By clicking on the filter icon, you'll be taken to a full-screen process view.
+The controls above the table provide quick status filters, a time range filter, grouping, and a funnel icon for additional filters.
 
 ![Filter](/images/Filter_1.png)
 
-### Step 2: Click on Filter option
+### Step 2: Choose a time range
 
-To filter the list, click on the "Filter" option.
-This will expand the filter section where you will be able to provide details about the process instance.
-This allows you to enter various details, including the process model, start date, end date, and status.
-To refine your search, you can enter multiple filter parameters.
+Use **Time range** to filter process instances by when they started. Choose **Last hour**, **Last 24 hours**, **Last 7 days**, **Last 14 days**, **Last 30 days**, or **Last 90 days** to apply that range immediately.
+
+You can enter a custom relative range such as `10m`, `2h`, `4d`, or `8w` in the search field and press **Enter**. The suffixes mean minutes, hours, days, and weeks.
+
+For a fixed range, choose **Absolute date**, select the start and end dates and times, choose whether to interpret them as UTC, and click **Apply**. **Back** returns to the relative range choices without applying the fixed range.
+
+### Step 3: Add other filters
+
+Use quick filters such as **Errors only**, or click the funnel icon to expand filters for the process model, initiator, status, and process-defined metadata. You can combine these with the time range and grouping controls. Filter changes update the process instance list automatically.
 
 ![Filter](/images/Filter_2.png)
-
-### Step 3: Apply Filters
-
-Once you have entered all the relevant filter details, click on the "**Apply**" button to apply the filters.
-The system will then display all the process instances matching the input details.
 
 ![Untitled](/images/Untitled_21.png)
 To filter process instances by **process-defined metadata**, first ensure the metadata field is displayed as a column:
@@ -412,7 +413,6 @@ Select the desired metadata field from the dropdown and click **Save**.
 ![Untitled](/images/Untitled_23.png)
 
 - After saving, the new column will be displayed. You can now use the filter controls for this column.
-Click the main **Apply** button to apply all filters.
 
 ![Filter](/images/Filter_3.png)
 

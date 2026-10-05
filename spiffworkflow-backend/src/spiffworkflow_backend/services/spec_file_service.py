@@ -8,7 +8,6 @@ from typing import Any
 
 from flask import current_app
 from lxml import etree  # type: ignore
-from SpiffWorkflow.bpmn.parser.BpmnParser import BpmnValidator  # type: ignore
 
 from spiffworkflow_backend.exceptions.error import NotAuthorizedError
 from spiffworkflow_backend.models.db import db
@@ -135,7 +134,6 @@ class SpecFileService(FileSystemService):
     def validate_bpmn_xml(cls, file_name: str, binary_data: bytes) -> None:
         file_type = FileSystemService.file_type(file_name)
         if file_type.value == FileType.bpmn.value:
-            BpmnValidator()
             parser = MyCustomParser()
             try:
                 parser.add_bpmn_xml(ProcessModelService.get_etree_from_xml_bytes(binary_data), filename=file_name)
@@ -319,9 +317,20 @@ class SpecFileService(FileSystemService):
             else:
                 existing_model_identifier = message_triggerable_process_model.process_model_identifier
                 if existing_model_identifier != ref.relative_location:
-                    raise ProcessModelFileInvalidError(
-                        f"Message model is already used to start process model {existing_model_identifier}"
+                    old_file_path = SpecFileService.full_path_from_relative_path(
+                        SpecFileService.path_join(existing_model_identifier, message_triggerable_process_model.file_name)
                     )
+                    # A missing old file means the process model moved. Preserve
+                    # the trigger row (and its id) while updating its location.
+                    # If the old file still exists, this is a real duplicate
+                    # message-start declaration and must remain an error.
+                    if os.path.isfile(old_file_path):
+                        raise ProcessModelFileInvalidError(
+                            f"Message model is already used to start process model {existing_model_identifier}"
+                        )
+                    message_triggerable_process_model.process_model_identifier = ref.relative_location
+                    message_triggerable_process_model.file_name = ref.file_name
+                    db.session.add(message_triggerable_process_model)
                 elif message_triggerable_process_model.file_name != ref.file_name:
                     message_triggerable_process_model.file_name = ref.file_name
                     db.session.add(message_triggerable_process_model)

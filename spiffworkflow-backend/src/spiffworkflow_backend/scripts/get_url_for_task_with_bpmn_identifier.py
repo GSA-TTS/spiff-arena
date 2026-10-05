@@ -4,7 +4,7 @@ from flask import current_app
 
 from spiffworkflow_backend.models.script_attributes_context import ScriptAttributesContext
 from spiffworkflow_backend.scripts.script import Script
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 
 
 class GetUrlForTaskWithBpmnIdentifier(Script):
@@ -28,7 +28,7 @@ class GetUrlForTaskWithBpmnIdentifier(Script):
         if spiff_task is None:
             raise Exception("Initial spiff task not given to get_url_for_task_with_bpmn_identifier")
 
-        desired_spiff_task = ProcessInstanceProcessor.get_task_by_bpmn_identifier(bpmn_identifier, spiff_task.workflow)
+        desired_spiff_task = ProcessInstanceRuntime.get_task_by_bpmn_identifier(bpmn_identifier, spiff_task.workflow)
         if desired_spiff_task is None:
             raise Exception(
                 f"Could not find a task with bpmn identifier '{bpmn_identifier}' in get_url_for_task_with_bpmn_identifier"
@@ -48,6 +48,6 @@ class GetUrlForTaskWithBpmnIdentifier(Script):
             public_segment = "/public"
 
         guid = str(desired_spiff_task.id)
-        fe_url = current_app.config["SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND"]
+        fe_url = current_app.config["SPIFFWORKFLOW_BACKEND_FRONTEND_URL"]
         url = f"{fe_url}{public_segment}/tasks/{script_attributes_context.process_instance_id}/{guid}"
         return url

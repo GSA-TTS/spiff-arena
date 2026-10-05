@@ -87,7 +87,11 @@ class BpmnProcessService:
 
     @classmethod
     def persist_bpmn_process_definition(
-        cls, process_model_identifier: str, bpmn_definition_to_task_definitions_mappings: dict | None = None
+        cls,
+        process_model_identifier: str,
+        bpmn_definition_to_task_definitions_mappings: dict | None = None,
+        specs: tuple[BpmnProcessSpec, IdToBpmnProcessSpecMapping] | None = None,
+        commit: bool = True,
     ) -> BpmnProcessDefinitionModel:
         if bpmn_definition_to_task_definitions_mappings is None:
             bpmn_definition_to_task_definitions_mappings = {}
@@ -95,7 +99,7 @@ class BpmnProcessService:
         (
             bpmn_process_spec,
             subprocesses,
-        ) = cls.get_process_model_and_subprocesses(process_model_identifier)
+        ) = specs if specs is not None else cls.get_process_model_and_subprocesses(process_model_identifier)
 
         bpmn_process_instance = cls.get_bpmn_process_instance_from_workflow_spec(bpmn_process_spec, subprocesses)
 
@@ -105,7 +109,9 @@ class BpmnProcessService:
         )
 
         cls.save_to_database(
-            bpmn_definition_to_task_definitions_mappings, bpmn_process_definition_parent=bpmn_process_definition_parent
+            bpmn_definition_to_task_definitions_mappings,
+            bpmn_process_definition_parent=bpmn_process_definition_parent,
+            commit=commit,
         )
         return bpmn_process_definition_parent
 
@@ -226,11 +232,9 @@ class BpmnProcessService:
     ) -> tuple[BpmnProcessSpec, IdToBpmnProcessSpecMapping]:
         process_model_info = ProcessModelService.get_process_model(process_model_identifier)
         if process_model_info is None:
-            raise (
-                ApiError(
-                    "process_model_not_found",
-                    f"The given process model was not found: {process_model_identifier}.",
-                )
+            raise ApiError(
+                "process_model_not_found",
+                f"The given process model was not found: {process_model_identifier}.",
             )
         spec_files = FileSystemService.get_files(process_model_info)
         return WorkflowSpecService.get_spec(spec_files, process_model_info, process_id_to_run=process_id_to_run)
@@ -255,7 +259,11 @@ class BpmnProcessService:
         cls,
         bpmn_definition_to_task_definitions_mappings: dict,
         bpmn_process_definition_parent: BpmnProcessDefinitionModel | None = None,
+        commit: bool = True,
     ) -> None:
+        if not commit:
+            cls._save_to_database_once(bpmn_definition_to_task_definitions_mappings, bpmn_process_definition_parent, commit=False)
+            return
         last_retryable_exception: Exception | None = None
         for attempt in range(cls.SAVE_TO_DATABASE_MAX_ATTEMPTS):
             try:
@@ -287,6 +295,7 @@ class BpmnProcessService:
         cls,
         bpmn_definition_to_task_definitions_mappings: dict,
         bpmn_process_definition_parent: BpmnProcessDefinitionModel | None = None,
+        commit: bool = True,
     ) -> None:
         parent_id = None
         subprocess_ids = []
@@ -339,18 +348,12 @@ class BpmnProcessService:
 
         if parent_id:
             for bpd_id in subprocess_ids:
-                bpmn_process_definition_relationship = BpmnProcessDefinitionRelationshipModel.query.filter_by(
-                    bpmn_process_definition_parent_id=parent_id,
-                    bpmn_process_definition_child_id=bpd_id,
-                ).first()
-                if bpmn_process_definition_relationship is None:
-                    bpmn_process_definition_relationship = BpmnProcessDefinitionRelationshipModel(
-                        bpmn_process_definition_parent_id=parent_id,
-                        bpmn_process_definition_child_id=bpd_id,
-                    )
-                    db.session.add(bpmn_process_definition_relationship)
+                BpmnProcessDefinitionRelationshipModel.insert_or_update_record(parent_id, bpd_id)
 
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
 
     @classmethod
     def _lookup_bpmn_process_definition_after_insert_or_ignore(
@@ -440,7 +443,7 @@ class BpmnProcessService:
                     )
         elif store_bpmn_definition_mappings:
             # this should only ever happen when new process instances use a pre-existing bpmn process definitions
-            # otherwise this should get populated on processor initialization
+            # otherwise this should get populated on runtime initialization
             cls._update_bpmn_definition_mappings(
                 bpmn_definition_to_task_definitions_mappings,
                 process_bpmn_identifier,

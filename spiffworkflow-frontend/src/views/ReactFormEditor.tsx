@@ -13,9 +13,11 @@ import {
   TextField,
   TextareaAutosize,
   Stack,
+  useTheme,
 } from '@mui/material';
-import { Can } from '@casl/react';
+import { Can } from '../contexts/Can';
 import MDEditor from '@uiw/react-md-editor';
+import { markdownDirectiveOptions } from '../components/MarkdownDirectives';
 import ProcessBreadcrumb from '../components/ProcessBreadcrumb';
 import HttpService from '../services/HttpService';
 import ConfirmButton from '../components/ConfirmButton';
@@ -32,6 +34,7 @@ import ActiveUsers from '../components/ActiveUsers';
 
 export default function ReactFormEditor() {
   const { t } = useTranslation();
+  const isDark = useTheme().palette.mode === 'dark';
   const params = useParams();
   const { addError, removeError } = useAPIError();
   const [showFileNameEditor, setShowFileNameEditor] = useState(false);
@@ -248,8 +251,9 @@ export default function ReactFormEditor() {
       };
 
       return (
-        <div data-color-mode="light">
+        <div data-color-mode={isDark ? 'dark' : 'light'}>
           <MDEditor
+            previewOptions={markdownDirectiveOptions}
             height={600}
             highlightEnable={false}
             value={processModelFileContents || ''}
@@ -272,6 +276,11 @@ export default function ReactFormEditor() {
         value={processModelFileContents || ''}
         extensions={extensions}
         onChange={(value) => setProcessModelFileContents(value || '')}
+        ariaLabel={
+          params.file_name
+            ? t('code_editor_for_file', { filename: params.file_name })
+            : undefined
+        }
       />
     );
   };

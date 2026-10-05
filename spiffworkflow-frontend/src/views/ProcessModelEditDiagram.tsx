@@ -7,12 +7,14 @@ import {
 } from 'react';
 import {
   generatePath,
+  useHref,
   useNavigate,
   useParams,
   useSearchParams,
 } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
+  Button,
   ButtonGroup,
   Stack,
   TextareaAutosize,
@@ -37,8 +39,8 @@ import { indentUnit } from '@codemirror/language';
 import { EditorView, Decoration, type DecorationSet } from '@codemirror/view';
 import { EditorState, StateField, StateEffect } from '@codemirror/state';
 
-import { Can } from '@casl/react';
 import MDEditor from '@uiw/react-md-editor';
+import { markdownDirectiveOptions } from '../components/MarkdownDirectives';
 import HttpService from '../services/HttpService';
 import ReactDiagramEditor from '../components/ReactDiagramEditor';
 import ReactFormBuilder from '../components/ReactFormBuilder/ReactFormBuilder';
@@ -52,7 +54,6 @@ import {
   useBpmnEditorScriptState,
   useScriptUnitTestsState,
   runScriptUnitTest,
-  MessageEditorDialog,
   MarkdownEditorDialog,
   JsonSchemaEditorDialog,
   FileNameEditorDialog,
@@ -61,18 +62,16 @@ import {
   ScriptEditorDialog,
   useDiagramNavigationStack,
   useDiagramNavigationHandlers,
-  fireMessageSave,
   closeMarkdownEditorWithUpdate,
   closeJsonSchemaEditorWithUpdate,
-  closeMessageEditorAndRefresh,
   closeScriptEditorWithUpdate,
 } from '../../packages/bpmn-js-spiffworkflow-react/src';
 import type { DiagramNavigationItem } from '../../packages/bpmn-js-spiffworkflow-react/src';
 import { spiffBpmnApiService } from '../services/SpiffBpmnApiService';
 import {
-  getGroupFromModifiedModelId,
   modifyProcessIdentifierForPathParam,
   setPageTitle,
+  unModifyProcessIdentifierForPathParam,
 } from '../helpers';
 import {
   PermissionsToCheck,
@@ -84,9 +83,13 @@ import { Notification } from '../components/Notification';
 import ActiveUsers from '../components/ActiveUsers';
 import useScriptAssistEnabled from '../hooks/useScriptAssistEnabled';
 import useProcessScriptAssistMessage from '../hooks/useProcessScriptAssistQuery';
-import { MessageEditor } from '../components/messages/MessageEditor';
 import { useUriListForPermissions } from '../hooks/UriListForPermissions';
 import { usePermissionFetcher } from '../hooks/PermissionService';
+import {
+  getBpmnMessageSyncStatus,
+  MessageModelResponseForSync,
+  syncBpmnMessagesToMessageModels,
+} from '../components/messages/MessageModelSync';
 
 // State effects for managing error line decorations in script editor
 const addErrorLineEffect = StateEffect.define<{
@@ -94,6 +97,8 @@ const addErrorLineEffect = StateEffect.define<{
   error: string;
 }>();
 const clearErrorLineEffect = StateEffect.define<null>();
+
+type MessageModelWarningType = 'changed' | 'missing' | null;
 
 // State field to track error line decorations
 const errorLineField = StateField.define<DecorationSet>({
@@ -135,6 +140,13 @@ export default function ProcessModelEditDiagram() {
 
   const [displaySaveFileMessage, setDisplaySaveFileMessage] =
     useState<boolean>(false);
+  const [messageModelWarningType, setMessageModelWarningType] =
+    useState<MessageModelWarningType>(null);
+  const [missingMessageModelIdentifiers, setMissingMessageModelIdentifiers] =
+    useState<string[]>([]);
+  const [messageModelsForSync, setMessageModelsForSync] = useState<
+    MessageModelResponseForSync[]
+  >([]);
   const [processModelFileInvalidText, setProcessModelFileInvalidText] =
     useState<string>('');
   const [scriptEditorTabValue, setScriptEditorTabValue] = useState<number>(0);
@@ -171,21 +183,17 @@ export default function ProcessModelEditDiagram() {
     canAccessMessages: ability.can('GET', targetUris.messageModelListPath),
     messageModelListPath: targetUris.messageModelListPath,
   });
-  const { onMessagesRequested } = bpmnEditorCallbacks;
   const {
     onLaunchScriptEditor,
     onLaunchMarkdownEditor,
-    onLaunchMessageEditor,
     onLaunchJsonSchemaEditor: launchJsonSchemaEditor,
     onSearchProcessModels,
     scriptEditorState,
     markdownEditorState,
-    messageEditorState,
     jsonSchemaEditorState,
     processSearchState,
     closeScriptEditor,
     closeMarkdownEditor,
-    closeMessageEditor,
     closeJsonSchemaEditor,
     selectProcessSearchResult,
   } = useBpmnEditorModals();
@@ -211,18 +219,43 @@ export default function ProcessModelEditDiagram() {
 
   const params = useParams();
   const navigate = useNavigate();
+  const messagesHref = useHref('/messages');
   const [searchParams] = useSearchParams();
+  // CRITICAL: params.process_model_id is ALREADY colon-separated from URL!
+  const modifiedProcessModelId = params.process_model_id || '';
+
+  // Navigate to the Messages page to edit a message model rather than opening
+  // an inline modal. This makes it clear the message is a shared resource.
+  const onLaunchMessageEditor = useCallback(
+    (event: any) => {
+      const messageId = event?.value?.messageId;
+      if (messageId) {
+        const nextSearchParams = new URLSearchParams({
+          message_id: messageId,
+          tab: 'models',
+        });
+        const sourceLocation = unModifyProcessIdentifierForPathParam(
+          modifiedProcessModelId,
+        );
+        if (sourceLocation) {
+          nextSearchParams.set('source_location', sourceLocation);
+        }
+        window.open(`${messagesHref}?${nextSearchParams.toString()}`, '_blank');
+      } else {
+        window.open(`${messagesHref}?tab=models`, '_blank');
+      }
+    },
+    [messagesHref, modifiedProcessModelId],
+  );
 
   const { addError, removeError } = useAPIError();
   const [processModelFile, setProcessModelFile] = useState<ProcessFile | null>(
     null,
   );
   const [newFileName, setNewFileName] = useState('');
-  const [bpmnXmlForDiagramRendering, setBpmnXmlForDiagramRendering] =
-    useState(null);
-
-  // CRITICAL: params.process_model_id is ALREADY colon-separated from URL!
-  const modifiedProcessModelId = params.process_model_id || '';
+  const [bpmnXmlForDiagramRendering, setBpmnXmlForDiagramRendering] = useState<
+    string | null
+  >(null);
 
   const processModelPath = `process-models/${modifiedProcessModelId}`;
 
@@ -338,6 +371,59 @@ export default function ProcessModelEditDiagram() {
       displayName: processModelFile.name,
     });
   }, [processModelFile, updateTop]);
+
+  useEffect(() => {
+    const fileName = params.file_name || '';
+    const isCurrentFileDmn =
+      searchParams.get('file_type') === 'dmn' || fileName.endsWith('.dmn');
+    if (
+      !bpmnXmlForDiagramRendering ||
+      isCurrentFileDmn ||
+      !ability.can('GET', targetUris.messageModelListPath)
+    ) {
+      setMessageModelWarningType(null);
+      setMissingMessageModelIdentifiers([]);
+      return;
+    }
+
+    HttpService.makeCallToBackend({
+      path: `/message-models/${modifiedProcessModelId}`,
+      successCallback: (result: {
+        messages: MessageModelResponseForSync[];
+      }) => {
+        setMessageModelsForSync(result.messages || []);
+        const syncStatus = getBpmnMessageSyncStatus(
+          bpmnXmlForDiagramRendering,
+          unModifyProcessIdentifierForPathParam(modifiedProcessModelId),
+          result.messages || [],
+        );
+        if (syncStatus.hasMissingMessageModel) {
+          setMissingMessageModelIdentifiers(
+            syncStatus.missingMessageModelIdentifiers,
+          );
+          setMessageModelWarningType('missing');
+        } else if (syncStatus.hasUnsyncedMessage) {
+          setMissingMessageModelIdentifiers([]);
+          setMessageModelWarningType('changed');
+        } else {
+          setMissingMessageModelIdentifiers([]);
+          setMessageModelWarningType(null);
+        }
+      },
+      failureCallback: () => {
+        setMessageModelsForSync([]);
+        setMissingMessageModelIdentifiers([]);
+        setMessageModelWarningType(null);
+      },
+    });
+  }, [
+    ability,
+    bpmnXmlForDiagramRendering,
+    modifiedProcessModelId,
+    params.file_name,
+    searchParams,
+    targetUris.messageModelListPath,
+  ]);
 
   /**
    * When the value of the Editor is updated dynamically async,
@@ -972,6 +1058,7 @@ export default function ProcessModelEditDiagram() {
         closeLabel={t('close')}
         renderEditor={() => (
           <MDEditor
+            previewOptions={markdownDirectiveOptions}
             height={500}
             highlightEnable={false}
             value={markdownText}
@@ -979,49 +1066,6 @@ export default function ProcessModelEditDiagram() {
             components={{
               textarea: markdownEditorTextArea,
             }}
-          />
-        )}
-      />
-    );
-  };
-
-  const handleMessageEditorClose = () => {
-    closeMessageEditorAndRefresh(
-      messageEditorState?.event,
-      closeMessageEditor,
-      onMessagesRequested,
-    );
-  };
-
-  const handleMessageEditorSave = (_event: any) => {
-    if (messageEditorState?.event?.eventBus) {
-      fireMessageSave(messageEditorState.event.eventBus);
-    }
-  };
-
-  const messageEditor = () => {
-    // do not render this component until we actually want to display it
-    if (!messageEditorState) {
-      return null;
-    }
-    return (
-      <MessageEditorDialog
-        open={!!messageEditorState}
-        onClose={handleMessageEditorClose}
-        onSave={handleMessageEditorSave}
-        title={t('diagram_message_editor_title')}
-        description={t('diagram_message_editor_description')}
-        saveLabel={t('diagram_message_editor_save')}
-        closeLabel={t('diagram_message_editor_close')}
-        renderEditor={() => (
-          <MessageEditor
-            modifiedProcessGroupIdentifier={getGroupFromModifiedModelId(
-              modifiedProcessModelId,
-            )}
-            messageId={messageEditorState.messageId}
-            correlationProperties={messageEditorState.correlationProperties}
-            messageEvent={messageEditorState.event}
-            elementId={messageEditorState.elementId}
           />
         )}
       />
@@ -1060,7 +1104,7 @@ export default function ProcessModelEditDiagram() {
       buildProcessFilePath,
       buildDmnListPath: (processModelId) =>
         generatePath('/process-models/:process_model_id/files', {
-          process_model_id: processModelId || null,
+          process_model_id: processModelId || '',
         }) + '?file_type=dmn',
     });
 
@@ -1161,6 +1205,12 @@ export default function ProcessModelEditDiagram() {
     return searchParams.get('file_type') === 'dmn' || fileName.endsWith('.dmn');
   };
 
+  const unsavedChangesSaveTooltip = diagramHasChanges
+    ? `${t('diagram_notifications_unsaved_changes_title')} ${t(
+        'diagram_notifications_unsaved_changes_message',
+      )}`
+    : undefined;
+
   const appropriateEditor = () => {
     if (isDmn()) {
       return (
@@ -1168,9 +1218,12 @@ export default function ProcessModelEditDiagram() {
           diagramType="dmn"
           diagramXML={bpmnXmlForDiagramRendering}
           fileName={params.file_name}
+          hasUnsavedChanges={diagramHasChanges}
           onDeleteFile={onDeleteFile}
           modifiedProcessModelId={modifiedProcessModelId || ''}
           saveDiagram={saveDiagram}
+          saveTooltip={unsavedChangesSaveTooltip}
+          lastSaved={processModelFile?.last_modified}
           navigationStack={navigationStack}
           onNavigate={(index) => {
             const item = navigationStack[index];
@@ -1202,6 +1255,7 @@ export default function ProcessModelEditDiagram() {
         diagramType="bpmn"
         diagramXML={bpmnXmlForDiagramRendering}
         disableSaveButton={!diagramHasChanges}
+        hasUnsavedChanges={diagramHasChanges}
         fileName={params.file_name}
         isPrimaryFile={params.file_name === processModel?.primary_file_name}
         processModel={processModel}
@@ -1224,6 +1278,8 @@ export default function ProcessModelEditDiagram() {
         onSetPrimaryFile={onSetPrimaryFileCallback}
         modifiedProcessModelId={modifiedProcessModelId || ''}
         saveDiagram={saveDiagram}
+        saveTooltip={unsavedChangesSaveTooltip}
+        lastSaved={processModelFile?.last_modified}
         navigationStack={navigationStack}
         onNavigate={(index) => {
           const item = navigationStack[index];
@@ -1253,22 +1309,68 @@ export default function ProcessModelEditDiagram() {
     return null;
   };
 
-  const unsavedChangesMessage = () => {
-    if (diagramHasChanges) {
-      return (
-        <Can I="PUT" a={targetUris.processModelFileShowPath} ability={ability}>
-          <Notification
-            title={t('diagram_notifications_unsaved_changes_title')}
-            type="error"
-            data-testid="process-model-file-changed"
-            hideCloseButton
-          >
-            {t('diagram_notifications_unsaved_changes_message')}
-          </Notification>
-        </Can>
-      );
+  const syncMessageModelsToDiagram = () => {
+    if (!bpmnXmlForDiagramRendering) {
+      return;
     }
-    return null;
+
+    const syncedXml = syncBpmnMessagesToMessageModels(
+      bpmnXmlForDiagramRendering,
+      unModifyProcessIdentifierForPathParam(modifiedProcessModelId),
+      messageModelsForSync,
+    );
+    if (syncedXml === bpmnXmlForDiagramRendering) {
+      setMissingMessageModelIdentifiers([]);
+      setMessageModelWarningType(null);
+      return;
+    }
+
+    setBpmnXmlForDiagramRendering(syncedXml);
+    setDiagramHasChanges(true);
+    setMissingMessageModelIdentifiers([]);
+    setMessageModelWarningType(null);
+  };
+
+  const messageModelWarning = () => {
+    if (!messageModelWarningType) {
+      return null;
+    }
+
+    const messageModelIsMissing = messageModelWarningType === 'missing';
+
+    return (
+      <Notification
+        title={
+          messageModelIsMissing
+            ? t('message_model_not_found_title')
+            : t('save_warning_title')
+        }
+        type={messageModelIsMissing ? 'error' : 'warning'}
+        data-testid="message-model-changed"
+        onClose={() => {
+          setMissingMessageModelIdentifiers([]);
+          setMessageModelWarningType(null);
+        }}
+      >
+        <>
+          {messageModelIsMissing
+            ? t('message_model_not_found_message', {
+                messageIdentifiers: missingMessageModelIdentifiers.join(', '),
+              })
+            : t('save_warning_message')}
+          {!messageModelIsMissing ? (
+            <Button
+              color="inherit"
+              size="small"
+              sx={{ ml: 1 }}
+              onClick={syncMessageModelsToDiagram}
+            >
+              {t('update_diagram')}
+            </Button>
+          ) : null}
+        </>
+      </Notification>
+    );
   };
 
   const pageModals = () => {
@@ -1279,7 +1381,6 @@ export default function ProcessModelEditDiagram() {
         {markdownEditor()}
         {jsonSchemaEditor()}
         {processModelSelector()}
-        {messageEditor()}
       </>
     );
   };
@@ -1301,7 +1402,7 @@ export default function ProcessModelEditDiagram() {
 
         {pageModals()}
 
-        {unsavedChangesMessage()}
+        {messageModelWarning()}
         {saveFileMessage()}
         {appropriateEditor()}
       </>

@@ -17,13 +17,13 @@ from sqlalchemy.orm import relationship
 
 from spiffworkflow_backend.models.db import SpiffworkflowBaseDBModel
 from spiffworkflow_backend.models.db import db
-from spiffworkflow_backend.models.json_data import JsonDataModel  # noqa: F401
+from spiffworkflow_backend.models.json_data import JsonDataModel
 from spiffworkflow_backend.models.user import UserModel
 
 
 class FilterValue(TypedDict):
     field_name: str
-    field_value: str | int | bool
+    field_value: str | int | float | bool
     operator: NotRequired[str]
 
 

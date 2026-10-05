@@ -3,13 +3,15 @@ from flask import Flask
 from starlette.testclient import TestClient
 
 from spiffworkflow_backend.exceptions.error import InvalidPermissionError
+from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.group import GroupModel
 from spiffworkflow_backend.models.human_task import HumanTaskModel
 from spiffworkflow_backend.models.human_task_user import HumanTaskUserModel
+from spiffworkflow_backend.models.user_group_assignment import UserGroupAssignmentModel
 from spiffworkflow_backend.models.user_group_assignment_waiting import UserGroupAssignmentWaitingModel
 from spiffworkflow_backend.services.authorization_service import AuthorizationService
 from spiffworkflow_backend.services.authorization_service import GroupPermissionsDict
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
 from spiffworkflow_backend.services.user_service import UserService
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
@@ -17,8 +19,103 @@ from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
 
 
 class TestAuthorizationService(BaseTest):
-    def test_does_not_fail_if_user_not_created(self, app: Flask, with_db_and_bpmn_file_cleanup: None) -> None:
+    def test_uses_configured_open_id_groups_claim(
+        self,
+        app: Flask,
+        with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(AuthorizationService, "load_permissions_yaml", lambda: {})
+        user_info = {
+            "preferred_username": "cognito-user",
+            "sub": "cognito-user",
+            "iss": "https://cognito.example.com",
+            "groups": ["wrong-provider-group"],
+            "cognito:groups": ["admin", "operators"],
+        }
+
+        with (
+            self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS", True),
+            self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_OPEN_ID_GROUPS_CLAIM", "cognito:groups"),
+        ):
+            user = AuthorizationService.create_user_from_sign_in(user_info)
+            assert sorted(group.identifier for group in user.groups) == ["admin", "everybody", "operators"]
+
+            user_info["cognito:groups"] = []
+            user = AuthorizationService.create_user_from_sign_in(user_info)
+            assert [group.identifier for group in user.groups] == ["everybody"]
+
+            user_info["cognito:groups"] = ["admin"]
+            AuthorizationService.create_user_from_sign_in(user_info)
+            del user_info["cognito:groups"]
+            user = AuthorizationService.create_user_from_sign_in(user_info)
+            assert [group.identifier for group in user.groups] == ["everybody"]
+
+            user_info["cognito:groups"] = ["admin"]
+            AuthorizationService.create_user_from_sign_in(user_info)
+            user_info["cognito:groups"] = "admin"
+            user = AuthorizationService.create_user_from_sign_in(user_info)
+            assert sorted(group.identifier for group in user.groups) == ["admin", "everybody"]
+
+    def test_sign_in_preserves_yaml_managed_group_assignment_when_oidc_is_authoritative(
+        self,
+        app: Flask,
+        with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        username = "yaml-group-user"
+        group_identifier = "yaml-managed-group"
+        monkeypatch.setattr(
+            AuthorizationService,
+            "load_permissions_yaml",
+            lambda: {
+                "groups": {group_identifier: {"users": [username]}},
+                "permissions": {},
+            },
+        )
+        user_info = {
+            "preferred_username": username,
+            "sub": username,
+            "iss": "https://test.stuff",
+            "groups": [],
+        }
+
+        with self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS", True):
+            user = AuthorizationService.create_user_from_sign_in(user_info)
+            group = GroupModel.query.filter_by(identifier=group_identifier).one()
+            original_assignment = UserGroupAssignmentModel.query.filter_by(user_id=user.id, group_id=group.id).one()
+
+            AuthorizationService.create_user_from_sign_in(user_info)
+
+            current_assignment = UserGroupAssignmentModel.query.filter_by(user_id=user.id, group_id=group.id).one()
+            assert current_assignment.id == original_assignment.id
+
+    def test_does_not_fail_if_user_not_created(
+        self,
+        app: Flask,
+        with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        missing_username = "not-created"
+        monkeypatch.setattr(
+            AuthorizationService,
+            "load_permissions_yaml",
+            lambda: {
+                "groups": {"missing-user-group": {"users": [missing_username]}},
+                "permissions": {
+                    "group-read": {
+                        "uri": "PG:missing-user-group",
+                        "actions": ["read"],
+                        "groups": ["missing-user-group"],
+                    },
+                },
+            },
+        )
+
         AuthorizationService.import_permissions_from_yaml_file()
+
+        waiting_assignment = UserGroupAssignmentWaitingModel.query.filter_by(username=missing_username).one()
+        assert waiting_assignment.group.identifier == "missing-user-group"
 
     def test_can_import_permissions_from_yaml(self, app: Flask, with_db_and_bpmn_file_cleanup: None) -> None:
         usernames = [
@@ -57,11 +154,20 @@ class TestAuthorizationService(BaseTest):
         app: Flask,
         client: TestClient,
         with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         initiator_user = self.find_or_create_user("initiator_user")
         assert initiator_user.principal is not None
         # to ensure there is a user that can be assigned to the task
         self.find_or_create_user("testuser1")
+        monkeypatch.setattr(
+            AuthorizationService,
+            "load_permissions_yaml",
+            lambda: {
+                "groups": {"Finance Team": {"users": ["testuser1", "testuser2"]}},
+                "permissions": {},
+            },
+        )
         AuthorizationService.import_permissions_from_yaml_file()
 
         process_model = load_test_spec(
@@ -71,14 +177,14 @@ class TestAuthorizationService(BaseTest):
         )
 
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=initiator_user)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
         human_task = process_instance.active_human_tasks[0]
-        spiff_task = processor.__class__.get_task_by_bpmn_identifier(human_task.task_name, processor.bpmn_process_instance)
-        ProcessInstanceService.complete_form_task(processor, spiff_task, {}, initiator_user, human_task)
+        spiff_task = runtime.__class__.get_task_by_bpmn_identifier(human_task.task_name, runtime.bpmn_process_instance)
+        ProcessInstanceService.complete_form_task(runtime, spiff_task, {}, initiator_user, human_task)
 
         human_task = process_instance.active_human_tasks[0]
-        spiff_task = processor.__class__.get_task_by_bpmn_identifier(human_task.task_name, processor.bpmn_process_instance)
+        spiff_task = runtime.__class__.get_task_by_bpmn_identifier(human_task.task_name, runtime.bpmn_process_instance)
         finance_user = AuthorizationService.create_user_from_sign_in(
             {
                 "username": "testuser2",
@@ -87,7 +193,63 @@ class TestAuthorizationService(BaseTest):
                 "email": "testuser2",
             }
         )
-        ProcessInstanceService.complete_form_task(processor, spiff_task, {}, finance_user, human_task)
+        ProcessInstanceService.complete_form_task(runtime, spiff_task, {}, finance_user, human_task)
+
+    def test_user_can_complete_task_when_stale_completed_human_task_row_exists(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+    ) -> None:
+        initiator_user = self.find_or_create_user("initiator_user")
+
+        process_model = load_test_spec(
+            process_model_id="test_group/model_with_lanes",
+            bpmn_file_name="lanes.bpmn",
+            process_model_source_directory="model_with_lanes",
+        )
+
+        process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=initiator_user)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        completed_human_task = process_instance.active_human_tasks[0]
+        completed_human_task.completed = True
+        db.session.add(completed_human_task)
+
+        active_human_task = HumanTaskModel(
+            process_instance_id=completed_human_task.process_instance_id,
+            process_model_display_name=completed_human_task.process_model_display_name,
+            bpmn_process_identifier=completed_human_task.bpmn_process_identifier,
+            form_file_name=completed_human_task.form_file_name,
+            ui_form_file_name=completed_human_task.ui_form_file_name,
+            task_guid=completed_human_task.task_guid,
+            task_id=completed_human_task.task_id,
+            task_name=completed_human_task.task_name,
+            task_title=completed_human_task.task_title,
+            task_type=completed_human_task.task_type,
+            task_status=completed_human_task.task_status,
+            lane_assignment_id=completed_human_task.lane_assignment_id,
+            lane_name=completed_human_task.lane_name,
+            json_metadata=completed_human_task.json_metadata,
+            completed=False,
+        )
+        db.session.add(active_human_task)
+        db.session.flush()
+        for human_task_user in completed_human_task.human_task_users:
+            db.session.add(
+                HumanTaskUserModel(
+                    user_id=human_task_user.user_id,
+                    human_task=active_human_task,
+                    added_by=human_task_user.added_by,
+                )
+            )
+        db.session.commit()
+
+        assert AuthorizationService.assert_user_can_complete_human_task(
+            process_instance.id,
+            active_human_task.task_id,
+            initiator_user,
+        )
 
     def test_explode_permissions_all_on_process_group(
         self,
@@ -443,6 +605,28 @@ class TestAuthorizationService(BaseTest):
         self.assert_user_has_permission(user, "read", "/v1.0/process-groups/hey")
         self.assert_user_has_permission(user, "read", "/v1.0/process-groups/hey:yo")
 
+    def test_add_permission_from_macro_commits_once(
+        self,
+        app: Flask,
+        with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_group = UserService.find_or_create_group("group_one")
+        original_commit = db.session.commit
+        commit_count = 0
+
+        def recording_commit() -> None:
+            nonlocal commit_count
+            commit_count += 1
+            original_commit()
+
+        monkeypatch.setattr(db.session, "commit", recording_commit)
+
+        permission_assignments = AuthorizationService.add_permission_from_uri_or_macro(user_group.identifier, "read", "PG:hey")
+
+        assert len(permission_assignments) > 1
+        assert commit_count == 1
+
     # https://github.com/sartography/spiff-arena/issues/1090 describes why we need access to process_group_show for parents
     def test_granting_access_to_subgroup_gives_access_to_subgroup_its_subgroups_and_even_show_for_its_parents(
         self,
@@ -501,10 +685,22 @@ class TestAuthorizationService(BaseTest):
         app: Flask,
         client: TestClient,
         with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         user = self.find_or_create_user(username="user_one")
         user_two = self.find_or_create_user(username="user_two")
         admin_user = self.find_or_create_user(username="testadmin1")
+
+        monkeypatch.setattr(
+            AuthorizationService,
+            "load_permissions_yaml",
+            lambda: {
+                "groups": {"admin": {"users": ["testadmin1"]}},
+                "permissions": {
+                    "admin-all": {"uri": "ALL", "actions": ["create"], "groups": ["admin"]},
+                },
+            },
+        )
 
         # this group is not mentioned so it will get deleted
         UserService.find_or_create_group("group_two")
@@ -598,6 +794,7 @@ class TestAuthorizationService(BaseTest):
                 ("/process-instances/for-me", "create"),
                 ("/process-instances/for-me/*", "read"),
                 ("/process-instances/report-metadata", "read"),
+                ("/process-instances/unique-milestone-names", "read"),
                 ("/process-instances/reports/*", "create"),
                 ("/process-instances/reports/*", "delete"),
                 ("/process-instances/reports/*", "read"),
@@ -685,10 +882,21 @@ class TestAuthorizationService(BaseTest):
         app: Flask,
         client: TestClient,
         with_db_and_bpmn_file_cleanup: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         user_regex = "REGEX:^user_.*"
+        persistent_user_regex = "REGEX:^persistent_.*"
         user = self.find_or_create_user(username="user_one")
         user_two = self.find_or_create_user(username="second_user_to_not_match_regex")
+
+        monkeypatch.setattr(
+            AuthorizationService,
+            "load_permissions_yaml",
+            lambda: {
+                "groups": {"persistent_group": {"users": [persistent_user_regex]}},
+                "permissions": {},
+            },
+        )
 
         # this group is not mentioned so it will get deleted
         UserService.find_or_create_group("group_two")
@@ -753,7 +961,7 @@ class TestAuthorizationService(BaseTest):
 
         waiting_assignments = UserGroupAssignmentWaitingModel.query.all()
         # ensure we didn't delete all of the user group assignments
-        assert len(waiting_assignments) > 0
+        assert [assignment.username for assignment in waiting_assignments] == [persistent_user_regex]
 
     def test_can_deny_access_with_permission(
         self,
@@ -797,9 +1005,9 @@ class TestAuthorizationService(BaseTest):
         user_one = self.find_or_create_user(username="user_one")
         user_group = UserService.find_or_create_group("Finance Team")
         UserService.add_user_to_group(user_one, user_group)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        self.complete_next_manual_task(processor)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        self.complete_next_manual_task(runtime)
 
         with self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS", True):
             user_two = AuthorizationService.create_user_from_sign_in(
@@ -884,9 +1092,9 @@ class TestAuthorizationService(BaseTest):
         user_one = self.find_or_create_user(username="user_one")
         user_group = UserService.find_or_create_group("Finance Team")
         UserService.add_user_to_group(user_one, user_group)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        self.complete_next_manual_task(processor, data={"itemId": "item1", "itemName": "Item One"})
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        self.complete_next_manual_task(runtime, data={"itemId": "item1", "itemName": "Item One"})
 
         with self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS", True):
             user_two = AuthorizationService.create_user_from_sign_in(
@@ -905,7 +1113,7 @@ class TestAuthorizationService(BaseTest):
                 .all()
             )
             assert len(human_task_users) == 1
-            self.complete_next_manual_task(processor, user=user_two)
+            self.complete_next_manual_task(runtime, user=user_two)
             human_task_users = (
                 HumanTaskUserModel.query.filter_by(user_id=user_two.id)
                 .join(HumanTaskModel)
@@ -913,7 +1121,7 @@ class TestAuthorizationService(BaseTest):
                 .all()
             )
             assert len(human_task_users) == 1
-            self.complete_next_manual_task(processor, user=user_two)
+            self.complete_next_manual_task(runtime, user=user_two)
 
             user_two = AuthorizationService.create_user_from_sign_in(
                 {
@@ -948,9 +1156,9 @@ class TestAuthorizationService(BaseTest):
         user_one = self.find_or_create_user(username="user_one")
         user_group = UserService.find_or_create_group("/Infra")
         UserService.add_user_to_group(user_one, user_group)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        self.complete_next_manual_task(processor, data={"itemId": "item1", "itemName": "Item One"})
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        self.complete_next_manual_task(runtime, data={"itemId": "item1", "itemName": "Item One"})
 
         with self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_OPEN_ID_IS_AUTHORITY_FOR_USER_GROUPS", True):
             user_two = AuthorizationService.create_user_from_sign_in(

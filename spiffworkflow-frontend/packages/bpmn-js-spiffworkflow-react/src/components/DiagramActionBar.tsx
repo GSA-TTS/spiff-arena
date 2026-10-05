@@ -1,11 +1,14 @@
 import React, { ReactNode } from 'react';
-import { Button, Stack } from '@mui/material';
+import { Button, Stack, Typography } from '@mui/material';
+import { WarningAmber } from '@mui/icons-material';
 
 type DiagramActionBarProps = {
   canSave?: boolean;
   onSave?: () => void;
   saveDisabled?: boolean;
   saveLabel: string;
+  saveRequiresAttention?: boolean;
+  saveTooltip?: ReactNode;
   canDelete?: boolean;
   onDelete?: () => void;
   deleteLabel?: string;
@@ -23,6 +26,7 @@ type DiagramActionBarProps = {
   referencesButton?: ReactNode;
   processInstanceRun?: ReactNode;
   activeUserElement?: ReactNode;
+  lastSavedElement?: ReactNode;
 };
 
 export default function DiagramActionBar({
@@ -30,6 +34,8 @@ export default function DiagramActionBar({
   onSave,
   saveDisabled,
   saveLabel,
+  saveRequiresAttention,
+  saveTooltip,
   canDelete,
   onDelete,
   deleteLabel,
@@ -47,7 +53,51 @@ export default function DiagramActionBar({
   referencesButton,
   processInstanceRun,
   activeUserElement,
+  lastSavedElement,
 }: DiagramActionBarProps) {
+  const canRenderSaveButton = Boolean(canSave && onSave);
+  const shouldShowSaveAttention =
+    canRenderSaveButton && saveRequiresAttention && !saveDisabled;
+
+  const saveButton = canRenderSaveButton ? (
+    <Button
+      onClick={onSave}
+      variant="contained"
+      size="small"
+      color="primary"
+      disabled={saveDisabled}
+      data-testid="process-model-file-save-button"
+    >
+      {saveLabel}
+    </Button>
+  ) : null;
+
+  const saveAttentionMessage =
+    shouldShowSaveAttention && saveTooltip ? (
+      <Stack
+        direction="row"
+        spacing={0.25}
+        alignItems="center"
+        role="status"
+        aria-live="polite"
+        data-testid="process-model-file-unsaved-message"
+        sx={{
+          color: 'warning.dark',
+          minHeight: 30,
+          maxWidth: { xs: '100%', md: 420 },
+        }}
+      >
+        <WarningAmber fontSize="small" />
+        <Typography
+          component="span"
+          variant="body2"
+          sx={{ fontWeight: 700, lineHeight: 1.2 }}
+        >
+          {saveTooltip}
+        </Typography>
+      </Stack>
+    ) : null;
+
   return (
     <Stack
       className="diagram-action-bar"
@@ -56,17 +106,9 @@ export default function DiagramActionBar({
       alignItems="center"
       sx={{ flexWrap: 'wrap' }}
     >
-      {canSave && onSave ? (
-        <Button
-          onClick={onSave}
-          variant="contained"
-          size="small"
-          disabled={saveDisabled}
-          data-testid="process-model-file-save-button"
-        >
-          {saveLabel}
-        </Button>
-      ) : null}
+      {saveAttentionMessage}
+      {lastSavedElement || null}
+      {saveButton}
       {processInstanceRun || null}
       {canDelete ? deleteButton || null : null}
       {canSetPrimary && onSetPrimary ? (

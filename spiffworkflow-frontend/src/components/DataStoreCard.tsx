@@ -5,6 +5,7 @@ import {
   CardContent,
   Stack,
 } from '@mui/material';
+import { Link } from 'react-router-dom';
 import { DataStore } from '../interfaces';
 
 const defaultStyle = {
@@ -25,7 +26,8 @@ export default function DataStoreCard({ dataStore }: { dataStore: DataStore }) {
   return (
     <Card elevation={0} sx={defaultStyle}>
       <CardActionArea
-        href={`/data-stores/${dataStore.id}/edit?type=${dataStore.type}&parentGroupId=${dataStore.location}`}
+        component={Link}
+        to={`/data-stores/${dataStore.id}/edit?type=${dataStore.type}&parentGroupId=${dataStore.location}`}
       >
         <CardContent>
           <Stack>

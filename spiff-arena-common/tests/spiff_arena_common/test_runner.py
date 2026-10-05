@@ -73,6 +73,325 @@ def test_custom_environment_get_current_task_data_filters_internal_keys():
     assert context["result"] == {"visible": 1}
 
 
+def test_custom_environment_get_toplevel_process_info_returns_local_stub():
+    context = {}
+
+    result = runner.CustomEnvironment().execute(
+        "process_info = get_toplevel_process_info()",
+        context,
+    )
+
+    assert result is True
+    assert context["process_info"] == {
+        "process_instance_id": 0,
+        "process_model_identifier": "local",
+    }
+
+
+def test_custom_environment_get_frontend_url_returns_local_stub():
+    context = {}
+
+    result = runner.CustomEnvironment().execute(
+        "frontend_url = get_frontend_url()",
+        context,
+    )
+
+    assert result is True
+    assert context["frontend_url"] == "http://local.spiff"
+
+
+def test_custom_environment_get_url_for_task_returns_local_task_urls():
+    context = {}
+
+    result = runner.CustomEnvironment().execute(
+        'task_url = get_url_for_task("task-guid-123")\n'
+        'public_task_url = get_url_for_task("task-guid-123", public=True)',
+        context,
+    )
+
+    assert result is True
+    assert context["task_url"] == "http://local.spiff/tasks/0/task-guid-123"
+    assert context["public_task_url"] == "http://local.spiff/public/tasks/0/task-guid-123"
+
+
+def test_custom_environment_get_task_potential_owners_returns_local_stub_owners():
+    context = {}
+
+    result = runner.CustomEnvironment().execute(
+        'owners = get_task_potential_owners("task-guid-123")\n'
+        'owners_by_keyword = get_task_potential_owners(task_guid="task-guid-456")',
+        context,
+    )
+
+    expected = {
+        "users": ["task_owner_1@example.com", "task_owner_2@example.com"],
+        "groups": ["task_owners"],
+    }
+    assert result is True
+    assert context["owners"] == expected
+    assert context["owners_by_keyword"] == expected
+
+
+def test_custom_environment_get_process_initiator_user_returns_serialized_stub_user():
+    context = {}
+
+    result = runner.CustomEnvironment().execute(
+        "initiator_user = get_process_initiator_user()\n"
+        'username = initiator_user["username"]',
+        context,
+    )
+
+    assert result is True
+    assert context["username"] == "initiator_user"
+    assert context["initiator_user"] == {
+        "id": 1,
+        "username": "initiator_user",
+        "email": "initiator_user@example.com",
+        "display_name": "Mr. Process Initiator User",
+        "tenant_specific_field_1": "initiator_tenant_specific_field_1",
+        "tenant_specific_field_2": "initiator_tenant_specific_field_2",
+        "tenant_specific_field_3": "initiator_tenant_specific_field_3",
+        "updated_at_in_seconds": 0,
+        "created_at_in_seconds": 0,
+    }
+
+
+def test_custom_environment_uses_configured_process_initiator_and_cleans_transport_data():
+    configured_user = {
+        "id": 23,
+        "username": "bob",
+        "email": "bob@example.com",
+        "display_name": "Bob Example",
+    }
+    context = {
+        "spiff__external_context": {
+            "get_process_initiator_user": configured_user,
+        },
+    }
+
+    result = runner.CustomEnvironment().execute(
+        "first_user = get_process_initiator_user()\n"
+        'first_user["username"] = "changed"\n'
+        "second_user = get_process_initiator_user()",
+        context,
+    )
+
+    assert result is True
+    assert context["first_user"]["username"] == "changed"
+    assert context["second_user"] == configured_user
+    assert "spiff__external_context" not in context
+
+
+def test_service_task_property_evaluation_has_all_local_stubs():
+    bpmn = """
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:spiffworkflow="http://spiffworkflow.org/bpmn/schema/1.0/core" id="Definitions_service_stub_context" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_service_stub_context" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>Flow_start_service</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:sequenceFlow id="Flow_start_service" sourceRef="StartEvent_1" targetRef="ServiceTask_1" />
+    <bpmn:serviceTask id="ServiceTask_1" name="Service Task">
+      <bpmn:extensionElements>
+        <spiffworkflow:serviceTaskOperator id="http/GetRequest" resultVariable="response">
+          <spiffworkflow:parameters>
+            <spiffworkflow:parameter id="task_data_value" type="str" value="get_task_data_value(&quot;case_id&quot;)" />
+            <spiffworkflow:parameter id="process_instance_id" type="int" value="get_toplevel_process_info()[&quot;process_instance_id&quot;]" />
+            <spiffworkflow:parameter id="frontend_url" type="str" value="get_frontend_url()" />
+            <spiffworkflow:parameter id="task_url" type="str" value="get_url_for_task(&quot;task-guid-123&quot;)" />
+            <spiffworkflow:parameter id="task_owners" type="json" value="get_task_potential_owners(&quot;task-guid-123&quot;)" />
+            <spiffworkflow:parameter id="current_user" type="json" value="get_current_user()" />
+            <spiffworkflow:parameter id="initiator_user" type="json" value="get_process_initiator_user()" />
+            <spiffworkflow:parameter id="group_members" type="json" value="get_group_members(&quot;reviewers&quot;)" />
+            <spiffworkflow:parameter id="current_task_data" type="json" value="get_current_task_data()" />
+          </spiffworkflow:parameters>
+        </spiffworkflow:serviceTaskOperator>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_start_service</bpmn:incoming>
+      <bpmn:outgoing>Flow_service_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="Flow_service_end" sourceRef="ServiceTask_1" targetRef="EndEvent_1" />
+    <bpmn:endEvent id="EndEvent_1">
+      <bpmn:incoming>Flow_service_end</bpmn:incoming>
+    </bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>
+"""
+    configured_user = {
+        "id": 23,
+        "username": "bob",
+        "email": "bob@example.com",
+        "display_name": "Bob Example",
+    }
+    specs, err = runner.specs_from_xml([("service_stub_context.bpmn", bpmn)])
+    assert err is None
+
+    session_id = "service-stub-context-test"
+    first_step = json.loads(
+        runner.advance_workflow(
+            specs,
+            {},
+            None,
+            "oneAtATime",
+            {
+                "data": {
+                    "case_id": "case-1",
+                    "spiff__external_context": {
+                        "get_process_initiator_user": configured_user,
+                    },
+                },
+            },
+            session_id=session_id,
+        )
+    )
+    start_task = next(
+        task
+        for task in first_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "StartEvent"
+    )
+    service_ready_step = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": start_task["id"], "data": {}},
+            "oneAtATime",
+            None,
+            session_id=session_id,
+        )
+    )
+    service_task = next(
+        task
+        for task in service_ready_step["pending_tasks"]
+        if task["task_spec"]["bpmn_id"] == "ServiceTask_1"
+    )
+    result = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": service_task["id"], "data": {}},
+            "oneAtATime",
+            None,
+            session_id=session_id,
+        )
+    )
+
+    assert result["status"] == "ok", result.get("message")
+    started_service_task = next(
+        task
+        for task in result["pending_tasks"]
+        if task["id"] == service_task["id"]
+    )
+    params = started_service_task["data"]["response"]["operation_params"]
+    assert params == {
+        "task_data_value": "case-1",
+        "process_instance_id": 0,
+        "frontend_url": "http://local.spiff",
+        "task_url": "http://local.spiff/tasks/0/task-guid-123",
+        "task_owners": {
+            "users": ["task_owner_1@example.com", "task_owner_2@example.com"],
+            "groups": ["task_owners"],
+        },
+        "current_user": {
+            "email": "current_user@example.com",
+            "display_name": "Mr. Current User",
+        },
+        "initiator_user": configured_user,
+        "group_members": [
+            "group_member_1@example.com",
+            "group_member_2@example.com",
+            "group_member_3@example.com",
+        ],
+        "current_task_data": {"case_id": "case-1"},
+        "spiff__task_data": {"case_id": "case-1"},
+    }
+
+
+def test_custom_script_engine_supplies_external_context_to_each_script():
+    configured_external_context = {
+        "get_process_initiator_user": {"username": "bob"},
+    }
+    engine = runner.CustomScriptEngine(configured_external_context)
+    first_task = SimpleNamespace(data={})
+    second_task = SimpleNamespace(data={})
+
+    engine.execute(first_task, 'username = get_process_initiator_user()["username"]')
+    engine.execute(second_task, 'username = get_process_initiator_user()["username"]')
+
+    assert first_task.data == {"username": "bob"}
+    assert second_task.data == {"username": "bob"}
+
+
+def test_advance_workflow_extracts_external_context_without_mutating_start_params(monkeypatch):
+    configured_external_context = {
+        "get_process_initiator_user": {"username": "bob"},
+    }
+    start_task = FakeTask()
+    workflow = SimpleNamespace(
+        script_engine=runner.CustomScriptEngine(),
+        get_tasks=lambda task_filter: [start_task],
+    )
+    start_params = {
+        "data": {
+            "case_id": "case-1",
+            "spiff__external_context": configured_external_context,
+        },
+    }
+    original_start_params = {
+        "data": {
+            "case_id": "case-1",
+            "spiff__external_context": configured_external_context,
+        },
+    }
+    monkeypatch.setattr(runner, "hydrate_workflow", lambda *args, **kwargs: workflow)
+    monkeypatch.setattr(runner, "next_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "_advance_workflow",
+        lambda *args, **kwargs: {"status": "ok"},
+    )
+
+    result = runner.advance_workflow(
+        specs={},
+        state={},
+        completed_task=None,
+        strategy_name="oneAtATime",
+        start_params=start_params,
+    )
+
+    assert result == {"status": "ok"}
+    assert workflow.script_engine.external_context == configured_external_context
+    assert start_task.data == {"case_id": "case-1"}
+    assert start_params == original_start_params
+
+
+def test_advance_workflow_restores_external_context_after_rehydration(monkeypatch):
+    configured_external_context = {
+        "get_process_initiator_user": {"username": "bob"},
+    }
+    workflow = SimpleNamespace(script_engine=runner.CustomScriptEngine())
+    monkeypatch.setattr(runner, "hydrate_workflow", lambda *args, **kwargs: workflow)
+    monkeypatch.setattr(runner, "next_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "_advance_workflow",
+        lambda *args, **kwargs: {"status": "ok"},
+    )
+
+    result = runner.advance_workflow(
+        specs={},
+        state={"restored": True},
+        completed_task=None,
+        strategy_name="oneAtATime",
+        start_params={
+            "data": {
+                "spiff__external_context": configured_external_context,
+            },
+        },
+    )
+
+    assert result == {"status": "ok"}
+    assert workflow.script_engine.external_context == configured_external_context
+
+
 def test_advance_workflow_prints_unittest_break_when_no_ready_task_is_unexpected(monkeypatch, capsys):
     task = FakeTask(bpmn_id="InitialTask")
     workflow = SimpleNamespace(subprocess_specs={}, completed=False)
@@ -168,3 +487,590 @@ def test_advance_workflow_prints_unittest_break_when_fixture_task_mismatches(mon
     assert event["reason"] == "fixture_task_mismatch"
     assert event["task_id"] == "ActualTask"
     assert event["expected_task_id"] == "ExpectedTask"
+
+
+
+def timer_boundary_bpmn():
+    return """
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_timer_boundary" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_timer_boundary" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>Flow_start_user</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:sequenceFlow id="Flow_start_user" sourceRef="StartEvent_1" targetRef="UserTask_1" />
+    <bpmn:userTask id="UserTask_1" name="Wait Here">
+      <bpmn:incoming>Flow_start_user</bpmn:incoming>
+      <bpmn:outgoing>Flow_user_end</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="Flow_user_end" sourceRef="UserTask_1" targetRef="EndEvent_main" />
+    <bpmn:endEvent id="EndEvent_main">
+      <bpmn:incoming>Flow_user_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:boundaryEvent id="Boundary_timer" name="Timeout" attachedToRef="UserTask_1" cancelActivity="false">
+      <bpmn:outgoing>Flow_timer_script</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerDefinition_1">
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">"PT1H"</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:sequenceFlow id="Flow_timer_script" sourceRef="Boundary_timer" targetRef="Script_timer_fired" />
+    <bpmn:scriptTask id="Script_timer_fired" name="Record Timer">
+      <bpmn:incoming>Flow_timer_script</bpmn:incoming>
+      <bpmn:outgoing>Flow_timer_end</bpmn:outgoing>
+      <bpmn:script>timer_fired = True</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="Flow_timer_end" sourceRef="Script_timer_fired" targetRef="EndEvent_timer" />
+    <bpmn:endEvent id="EndEvent_timer">
+      <bpmn:incoming>Flow_timer_end</bpmn:incoming>
+    </bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>
+"""
+
+
+def timer_intermediate_bpmn():
+    return """
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_timer_intermediate" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_timer_intermediate" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"><bpmn:outgoing>Flow_start_timer</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:sequenceFlow id="Flow_start_timer" sourceRef="StartEvent_1" targetRef="Timer_1" />
+    <bpmn:intermediateCatchEvent id="Timer_1" name="Wait">
+      <bpmn:incoming>Flow_start_timer</bpmn:incoming><bpmn:outgoing>Flow_timer_script</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="TimerDefinition_1"><bpmn:timeDuration xsi:type="bpmn:tFormalExpression">"PT1H"</bpmn:timeDuration></bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:sequenceFlow id="Flow_timer_script" sourceRef="Timer_1" targetRef="Script_1" />
+    <bpmn:scriptTask id="Script_1">
+      <bpmn:incoming>Flow_timer_script</bpmn:incoming><bpmn:outgoing>Flow_script_end</bpmn:outgoing>
+      <bpmn:script>timer_replayed = True</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="Flow_script_end" sourceRef="Script_1" targetRef="EndEvent_1" />
+    <bpmn:endEvent id="EndEvent_1"><bpmn:incoming>Flow_script_end</bpmn:incoming></bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>
+"""
+
+
+def test_unittest_replays_recorded_intermediate_timer(tmp_path):
+    fixture_file = tmp_path / "timer-recording.json"
+    fixture_file.write_text(json.dumps({
+        "pendingTaskStack": [
+            {"id": "Timer_1", "data": {}, "force_timer": True},
+        ],
+    }))
+    specs, err = runner.specs_from_xml([("timer.bpmn", timer_intermediate_bpmn())])
+    assert err is None
+
+    result = json.loads(runner.advance_workflow(
+        specs,
+        {},
+        None,
+        "unittest",
+        {"data": {"spiff_testFixture_file": str(fixture_file)}},
+    ))
+
+    assert result["status"] == "ok"
+    assert result["completed"] is True
+    assert result["result"]["timer_replayed"] is True
+    assert result["result"]["spiff_testFixture_index"] == -1
+
+
+def test_unittest_replays_recorded_intermediate_timer_from_inline_fixture():
+    specs, err = runner.specs_from_xml([("timer.bpmn", timer_intermediate_bpmn())])
+    assert err is None
+
+    result = json.loads(runner.advance_workflow(
+        specs,
+        {},
+        None,
+        "unittest",
+        {"data": {"spiff_testFixture": {"pendingTaskStack": [
+            {"id": "Timer_1", "data": {}, "force_timer": True},
+        ]}}},
+    ))
+
+    assert result["completed"] is True
+    assert result["result"]["timer_replayed"] is True
+
+
+def test_unittest_reports_recorded_timer_that_is_not_waiting(tmp_path, capsys):
+    fixture_file = tmp_path / "bad-timer-recording.json"
+    fixture_file.write_text(json.dumps({
+        "pendingTaskStack": [
+            {"id": "Missing_Timer", "data": {}, "force_timer": True},
+        ],
+    }))
+    specs, err = runner.specs_from_xml([("timer.bpmn", timer_intermediate_bpmn())])
+    assert err is None
+
+    result = json.loads(runner.advance_workflow(
+        specs,
+        {},
+        None,
+        "unittest",
+        {"data": {"spiff_testFixture_file": str(fixture_file)}},
+    ))
+
+    event = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert event["reason"] == "recorded_timer_not_waiting"
+    assert event["expected_task_id"] == "Missing_Timer"
+    assert "spiff_testFixture_index" not in result["pending_tasks"][0]["data"]
+
+
+def test_unittest_prioritizes_recorded_boundary_timer(tmp_path, capsys):
+    fixture_file = tmp_path / "boundary-recording.json"
+    fixture_file.write_text(json.dumps({
+        "pendingTaskStack": [
+            {"id": "Boundary_timer", "data": {}, "force_timer": True},
+        ],
+    }))
+    specs, err = runner.specs_from_xml([("boundary.bpmn", timer_boundary_bpmn())])
+    assert err is None
+
+    result = json.loads(runner.advance_workflow(
+        specs,
+        {},
+        None,
+        "unittest",
+        {"data": {"spiff_testFixture_file": str(fixture_file)}},
+    ))
+
+    assert result["status"] == "ok"
+    assert result["state"]["tasks"]
+    assert any(
+        task["task_spec"] == "Boundary_timer"
+        and task["state"] == TaskState.COMPLETED
+        for task in result["state"]["tasks"].values()
+    )
+    assert any(
+        task["task_spec"] == "Script_timer_fired"
+        and task["state"] == TaskState.COMPLETED
+        for task in result["state"]["tasks"].values()
+    )
+    assert any(
+        task["task_spec"]["bpmn_id"] == "UserTask_1"
+        and task["state"] == TaskState.READY
+        for task in result["pending_tasks"]
+    )
+    event = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert event["reason"] == "fixture_exhausted"
+    assert event["fixture_index"] == -1
+
+
+def advance_to_waiting_timer_boundary(specs, session_id="timer-boundary-test"):
+    first_step = json.loads(
+        runner.advance_workflow(specs, None, None, "oneAtATime", None, session_id=session_id)
+    )
+    start_task = next(
+        task
+        for task in first_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "StartEvent"
+    )
+    user_ready_step = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": start_task["id"], "data": {}},
+            "oneAtATime",
+            None,
+            session_id=session_id,
+        )
+    )
+    user_task = next(
+        task
+        for task in user_ready_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "UserTask"
+    )
+    user_started_step = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": user_task["id"], "data": {}},
+            "oneAtATime",
+            None,
+            session_id=session_id,
+        )
+    )
+    timer_task = next(
+        task
+        for task in user_started_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "BoundaryEvent"
+    )
+    assert timer_task["state"] == TaskState.WAITING
+    return user_started_step, timer_task
+
+
+def test_force_timer_boundary_event_advances_without_waiting():
+    specs, err = runner.specs_from_xml([("timer_boundary.bpmn", timer_boundary_bpmn())])
+    assert err is None
+    session_id = "force-timer-boundary-test"
+    _, timer_task = advance_to_waiting_timer_boundary(specs, session_id=session_id)
+
+    result = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": timer_task["id"], "data": {}, "force_timer": True},
+            "greedy",
+            None,
+            session_id=session_id,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["completed"] is False
+    assert any(
+        task["task_spec"]["bpmn_id"] == "UserTask_1" and task["state"] == TaskState.STARTED
+        for task in result["pending_tasks"]
+    )
+    assert result["state"]["tasks"][timer_task["id"]]["state"] == TaskState.COMPLETED
+    assert any(
+        task["task_spec"] == "Script_timer_fired" and task["state"] == TaskState.COMPLETED
+        for task in result["state"]["tasks"].values()
+    )
+
+
+def test_waiting_timer_boundary_event_requires_force_timer_flag():
+    specs, err = runner.specs_from_xml([("timer_boundary.bpmn", timer_boundary_bpmn())])
+    assert err is None
+    session_id = "timer-boundary-requires-force-test"
+    _, timer_task = advance_to_waiting_timer_boundary(specs, session_id=session_id)
+
+    result = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": timer_task["id"], "data": {}},
+            "greedy",
+            None,
+            session_id=session_id,
+        )
+    )
+
+    assert result["status"] == "error"
+    assert "force_timer" in result["message"]
+
+
+def test_force_timer_rejects_non_timer_task():
+    specs, err = runner.specs_from_xml([("timer_boundary.bpmn", timer_boundary_bpmn())])
+    assert err is None
+    user_started_step, _ = advance_to_waiting_timer_boundary(specs, session_id="force-timer-validation-test")
+    user_task = next(
+        task
+        for task in user_started_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "UserTask"
+    )
+
+    result = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": user_task["id"], "data": {}, "force_timer": True},
+            "greedy",
+            None,
+            session_id="force-timer-validation-test",
+        )
+    )
+
+    assert result["status"] == "error"
+    assert "force-fired" in result["message"]
+
+
+def test_service_task_connector_error_follows_matching_error_boundary_event(monkeypatch):
+    bpmn = """
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:spiffworkflow="http://spiffworkflow.org/bpmn/schema/1.0/core" id="Definitions_error_boundary" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_error_boundary" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>Flow_start_service</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:sequenceFlow id="Flow_start_service" sourceRef="StartEvent_1" targetRef="ServiceTask_1" />
+    <bpmn:serviceTask id="ServiceTask_1" name="Service Task">
+      <bpmn:extensionElements>
+        <spiffworkflow:serviceTaskOperator id="http/GetRequestV2" resultVariable="response">
+          <spiffworkflow:parameters>
+            <spiffworkflow:parameter id="url" type="str" value="&quot;https://example.invalid&quot;" />
+          </spiffworkflow:parameters>
+        </spiffworkflow:serviceTaskOperator>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_start_service</bpmn:incoming>
+      <bpmn:outgoing>Flow_service_normal</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="Flow_service_normal" sourceRef="ServiceTask_1" targetRef="Script_normal" />
+    <bpmn:scriptTask id="Script_normal">
+      <bpmn:incoming>Flow_service_normal</bpmn:incoming>
+      <bpmn:outgoing>Flow_normal_end</bpmn:outgoing>
+      <bpmn:script>route = "normal"</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="EndEvent_normal">
+      <bpmn:incoming>Flow_normal_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_normal_end" sourceRef="Script_normal" targetRef="EndEvent_normal" />
+    <bpmn:boundaryEvent id="Boundary_missing_schema" attachedToRef="ServiceTask_1">
+      <bpmn:outgoing>Flow_boundary_handled</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="ErrorDefinition_missing_schema" errorRef="MissingSchema" />
+    </bpmn:boundaryEvent>
+    <bpmn:sequenceFlow id="Flow_boundary_handled" sourceRef="Boundary_missing_schema" targetRef="Script_handled" />
+    <bpmn:scriptTask id="Script_handled">
+      <bpmn:incoming>Flow_boundary_handled</bpmn:incoming>
+      <bpmn:outgoing>Flow_handled_end</bpmn:outgoing>
+      <bpmn:script>route = "handled"</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="EndEvent_handled">
+      <bpmn:incoming>Flow_handled_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_handled_end" sourceRef="Script_handled" targetRef="EndEvent_handled" />
+  </bpmn:process>
+  <bpmn:error id="MissingSchema" name="MissingSchema" errorCode="MissingSchema" />
+</bpmn:definitions>
+"""
+
+    def connector_error(*_args, **_kwargs):
+        return json.dumps(
+            {
+                "command_response": {"body": "{}", "mimetype": "application/json"},
+                "command_response_version": 2,
+                "error": {
+                    "error_code": "MissingSchema",
+                    "message": "No schema supplied",
+                },
+            }
+        )
+
+    monkeypatch.setattr(runner.CustomScriptEngine, "call_service", connector_error)
+
+    specs, err = runner.specs_from_xml([("error_boundary.bpmn", bpmn)])
+    assert err is None
+
+    result = None
+    for _ in range(10):
+        result = json.loads(
+            runner.advance_workflow(
+                specs,
+                None,
+                None,
+                "greedy",
+                None,
+                session_id="error-boundary-test",
+            )
+        )
+        if result["completed"] or result["status"] != "ok":
+            break
+
+    assert result["status"] == "ok"
+    assert result["completed"] is True
+    assert result["result"]["route"] == "handled"
+
+
+def test_started_service_task_http_status_completion_follows_matching_error_boundary_event():
+    bpmn = """
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:spiffworkflow="http://spiffworkflow.org/bpmn/schema/1.0/core" id="Definitions_started_http_error_boundary" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_started_http_error_boundary" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>Flow_start_service</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:sequenceFlow id="Flow_start_service" sourceRef="StartEvent_1" targetRef="ServiceTask_1" />
+    <bpmn:serviceTask id="ServiceTask_1" name="Service Task">
+      <bpmn:extensionElements>
+        <spiffworkflow:serviceTaskOperator id="http/GetRequest" resultVariable="response">
+          <spiffworkflow:parameters>
+            <spiffworkflow:parameter id="url" type="str" value="&quot;https://example.invalid/missing&quot;" />
+          </spiffworkflow:parameters>
+        </spiffworkflow:serviceTaskOperator>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_start_service</bpmn:incoming>
+      <bpmn:outgoing>Flow_service_normal</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="Flow_service_normal" sourceRef="ServiceTask_1" targetRef="Script_normal" />
+    <bpmn:scriptTask id="Script_normal">
+      <bpmn:incoming>Flow_service_normal</bpmn:incoming>
+      <bpmn:outgoing>Flow_normal_end</bpmn:outgoing>
+      <bpmn:script>route = "normal"</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="EndEvent_normal">
+      <bpmn:incoming>Flow_normal_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_normal_end" sourceRef="Script_normal" targetRef="EndEvent_normal" />
+    <bpmn:boundaryEvent id="Boundary_http_404" attachedToRef="ServiceTask_1">
+      <bpmn:outgoing>Flow_boundary_handled</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="ErrorDefinition_http_404" errorRef="HttpError404" />
+    </bpmn:boundaryEvent>
+    <bpmn:sequenceFlow id="Flow_boundary_handled" sourceRef="Boundary_http_404" targetRef="Script_handled" />
+    <bpmn:scriptTask id="Script_handled">
+      <bpmn:incoming>Flow_boundary_handled</bpmn:incoming>
+      <bpmn:outgoing>Flow_handled_end</bpmn:outgoing>
+      <bpmn:script>route = "handled"</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="EndEvent_handled">
+      <bpmn:incoming>Flow_handled_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_handled_end" sourceRef="Script_handled" targetRef="EndEvent_handled" />
+  </bpmn:process>
+  <bpmn:error id="HttpError404" name="HttpError404" errorCode="HttpError404" />
+</bpmn:definitions>
+"""
+
+    specs, err = runner.specs_from_xml([("started_http_error_boundary.bpmn", bpmn)])
+    assert err is None
+
+    session_id = "started-http-error-boundary-test"
+    first_step = json.loads(
+        runner.advance_workflow(specs, None, None, "oneAtATime", None, session_id=session_id)
+    )
+    start_task = next(
+        task
+        for task in first_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "StartEvent"
+    )
+    service_ready_step = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": start_task["id"], "data": {}},
+            "oneAtATime",
+            None,
+            session_id=session_id,
+        )
+    )
+    service_task = next(
+        task
+        for task in service_ready_step["pending_tasks"]
+        if task["task_spec"]["typename"] == "ServiceTask"
+    )
+
+    started_step = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {"id": service_task["id"], "data": {}},
+            "oneAtATime",
+            None,
+            session_id=session_id,
+        )
+    )
+    started_service_task = next(
+        task
+        for task in started_step["pending_tasks"]
+        if task["id"] == service_task["id"]
+    )
+    assert started_service_task["state"] == TaskState.STARTED
+
+    result = json.loads(
+        runner.advance_workflow(
+            specs,
+            None,
+            {
+                "id": service_task["id"],
+                "data": {
+                    "response": {
+                        "body": {},
+                        "mimetype": "application/json",
+                        "http_status": 404,
+                        "headers": {},
+                        "command_response": {
+                            "body": {},
+                            "mimetype": "application/json",
+                            "http_status": 404,
+                            "headers": {},
+                        },
+                        "command_response_version": 2,
+                        "error": {
+                            "error_code": "HttpError404",
+                            "message": "HTTP 404 error from service. Response: {}",
+                        },
+                        "operator_identifier": "http/GetRequest",
+                    }
+                },
+            },
+            "greedy",
+            None,
+            session_id=session_id,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["completed"] is True
+    assert result["result"]["route"] == "handled"
+
+
+def test_service_task_http_status_response_follows_matching_error_boundary_event(monkeypatch):
+    bpmn = """
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:spiffworkflow="http://spiffworkflow.org/bpmn/schema/1.0/core" id="Definitions_http_error_boundary" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_http_error_boundary" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1">
+      <bpmn:outgoing>Flow_start_service</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:sequenceFlow id="Flow_start_service" sourceRef="StartEvent_1" targetRef="ServiceTask_1" />
+    <bpmn:serviceTask id="ServiceTask_1" name="Service Task">
+      <bpmn:extensionElements>
+        <spiffworkflow:serviceTaskOperator id="http/GetRequestV2" resultVariable="response">
+          <spiffworkflow:parameters>
+            <spiffworkflow:parameter id="url" type="str" value="&quot;https://example.invalid/missing&quot;" />
+          </spiffworkflow:parameters>
+        </spiffworkflow:serviceTaskOperator>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_start_service</bpmn:incoming>
+      <bpmn:outgoing>Flow_service_normal</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="Flow_service_normal" sourceRef="ServiceTask_1" targetRef="Script_normal" />
+    <bpmn:scriptTask id="Script_normal">
+      <bpmn:incoming>Flow_service_normal</bpmn:incoming>
+      <bpmn:outgoing>Flow_normal_end</bpmn:outgoing>
+      <bpmn:script>route = "normal"</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="EndEvent_normal">
+      <bpmn:incoming>Flow_normal_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_normal_end" sourceRef="Script_normal" targetRef="EndEvent_normal" />
+    <bpmn:boundaryEvent id="Boundary_http_404" attachedToRef="ServiceTask_1">
+      <bpmn:outgoing>Flow_boundary_handled</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="ErrorDefinition_http_404" errorRef="ServiceTaskHttpError404" />
+    </bpmn:boundaryEvent>
+    <bpmn:sequenceFlow id="Flow_boundary_handled" sourceRef="Boundary_http_404" targetRef="Script_handled" />
+    <bpmn:scriptTask id="Script_handled">
+      <bpmn:incoming>Flow_boundary_handled</bpmn:incoming>
+      <bpmn:outgoing>Flow_handled_end</bpmn:outgoing>
+      <bpmn:script>route = "handled"</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:endEvent id="EndEvent_handled">
+      <bpmn:incoming>Flow_handled_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_handled_end" sourceRef="Script_handled" targetRef="EndEvent_handled" />
+  </bpmn:process>
+  <bpmn:error id="ServiceTaskHttpError404" name="ServiceTaskHttpError404" errorCode="ServiceTaskHttpError404" />
+</bpmn:definitions>
+"""
+
+    def connector_404(*_args, **_kwargs):
+        return json.dumps(
+            {
+                "command_response": {
+                    "body": "not found",
+                    "mimetype": "text/plain",
+                    "http_status": 404,
+                },
+                "command_response_version": 2,
+                "error": None,
+            }
+        )
+
+    monkeypatch.setattr(runner.CustomScriptEngine, "call_service", connector_404)
+
+    specs, err = runner.specs_from_xml([("http_error_boundary.bpmn", bpmn)])
+    assert err is None
+
+    result = None
+    for _ in range(10):
+        result = json.loads(
+            runner.advance_workflow(
+                specs,
+                None,
+                None,
+                "greedy",
+                None,
+                session_id="http-error-boundary-test",
+            )
+        )
+        if result["completed"] or result["status"] != "ok":
+            break
+
+    assert result["status"] == "ok"
+    assert result["completed"] is True
+    assert result["result"]["route"] == "handled"
