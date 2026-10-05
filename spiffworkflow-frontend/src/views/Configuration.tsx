@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Tabs, Tab } from '@mui/material'; // Use MUI Tabs and Tab
-import { Can } from '@casl/react';
+import { Can } from '../contexts/Can';
 import SecretList from './SecretList';
 import SecretNew from './SecretNew';
 import SecretShow from './SecretShow';
@@ -70,9 +70,7 @@ export default function Configuration({ extensionUxElements }: OwnProps) {
     );
   };
 
-  // wow, if you do not check to see if the permissions are loaded, then in safari,
-  // you will get {null} inside the <TabList> which totally explodes carbon (in safari!).
-  // we *think* that null inside a TabList works fine in all other browsers.
+  // Avoid rendering incomplete tabs while permissions are still loading.
   if (!permissionsLoaded) {
     return null;
   }

@@ -39,6 +39,7 @@ import {
   errorForDisplayFromProcessInstanceErrorDetail,
 } from './ErrorDisplay';
 import DateAndTimeService from '../services/DateAndTimeService';
+import FormattedDateTime from './FormattedDateTime';
 
 type OwnProps = {
   variant: string; // 'all' or 'for-me'
@@ -56,7 +57,8 @@ const style = {
   maxWidth: 'md', // Added max width for responsiveness
   maxHeight: '90vh', // Limit height to 90% of viewport height
   bgcolor: 'background.paper',
-  border: '2px solid #000',
+  border: '2px solid',
+  borderColor: 'divider',
   boxShadow: 24,
   p: 4,
   overflow: 'auto', // Enable scrolling for large content
@@ -331,9 +333,7 @@ export default function ProcessInstanceLogList({
 
     let timestampComponent = (
       <TableCell>
-        {DateAndTimeService.convertSecondsToFormattedDateTime(
-          logEntry.timestamp,
-        )}
+        <FormattedDateTime seconds={logEntry.timestamp} />
       </TableCell>
     );
     if (logEntry.spiff_task_guid && logEntry.event_type !== 'task_cancelled') {
@@ -343,7 +343,11 @@ export default function ProcessInstanceLogList({
             reloadDocument
             data-testid="process-instance-show-link"
             to={`${processInstanceShowPageBaseUrl}/${logEntry.process_instance_id}/${logEntry.spiff_task_guid}`}
-            title={t('view_state_when_task_was_completed')}
+            title={`${t('view_state_when_task_was_completed')} — ${
+              DateAndTimeService.convertSecondsToFormattedDateTimeWithTimezone(
+                logEntry.timestamp,
+              ) ?? ''
+            }`}
           >
             {DateAndTimeService.convertSecondsToFormattedDateTime(
               logEntry.timestamp,
@@ -387,7 +391,7 @@ export default function ProcessInstanceLogList({
     }
     tableHeaders.push(<TableCell>{t('timestamp')}</TableCell>);
     return (
-      <TableContainer>
+      <TableContainer tabIndex={0}>
         <Table size="medium">
           <TableHead>
             <TableRow>{tableHeaders}</TableRow>

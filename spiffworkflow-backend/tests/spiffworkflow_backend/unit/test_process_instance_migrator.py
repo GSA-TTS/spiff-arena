@@ -19,29 +19,33 @@ from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.process_instance import ProcessInstanceStatus
 from spiffworkflow_backend.models.process_instance_event import ProcessInstanceEventModel
 from spiffworkflow_backend.models.process_model import ProcessModelInfo
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
+from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.models.task_definition import TaskDefinitionModel
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_persistence_service import ProcessInstancePersistenceService
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
 from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
 
 
 class TestProcessInstanceMigrator(BaseTest):
-    def _remove_empty_delta_fields(self, data: dict | list) -> None:
-        """Remove delta fields from serialized workflow data for comparison."""
+    def _remove_new_serializer_fields(self, data: dict | list) -> None:
+        """Remove fields added by newer serializers from historical fixture comparisons."""
         if isinstance(data, dict):
             # Remove delta field if present (we store full data, not deltas)
             if "delta" in data:
                 del data["delta"]
+            for field in ("bpmn_start_events", "trigger_specs"):
+                if data.get(field) == []:
+                    del data[field]
 
             # Recursively process nested structures
             for value in list(data.values()):
                 if isinstance(value, dict | list):
-                    self._remove_empty_delta_fields(value)
+                    self._remove_new_serializer_fields(value)
         elif isinstance(data, list):
             for item in data:
                 if isinstance(item, dict | list):
-                    self._remove_empty_delta_fields(item)
+                    self._remove_new_serializer_fields(item)
 
     def test_data_migrations_directory_has_not_changed(
         self,
@@ -82,8 +86,8 @@ class TestProcessInstanceMigrator(BaseTest):
         db.session.add(process_instance)
         db.session.commit()
 
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
         ProcessInstanceMigrator.run(process_instance)
 
     def test_can_run_version_1_3_migration(
@@ -101,8 +105,8 @@ class TestProcessInstanceMigrator(BaseTest):
         process_instance.spiff_serializer_version = "1"
         db.session.add(process_instance)
         db.session.commit()
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
 
         task_model = (
             TaskModel.query.filter_by(process_instance_id=process_instance.id)
@@ -149,13 +153,13 @@ class TestProcessInstanceMigrator(BaseTest):
         Version4.run(process_instance)
         update_data_objects(bpmn_process_dict_version_4_from_spiff)
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance.id).first()
-        processor = ProcessInstanceProcessor(
+        runtime = ProcessInstanceRuntime(
             process_instance, include_task_data_for_completed_tasks=True, include_completed_subprocesses=True
         )
-        bpmn_process_dict_version_4 = processor.serialize(serialize_script_engine_state=False)
+        bpmn_process_dict_version_4 = runtime.serialize(serialize_script_engine_state=False)
         self.round_last_state_change(bpmn_process_dict_version_4)
         self.round_last_state_change(bpmn_process_dict_version_4_from_spiff)
-        self._remove_empty_delta_fields(bpmn_process_dict_version_4)
+        self._remove_new_serializer_fields(bpmn_process_dict_version_4)
         assert bpmn_process_dict_version_4 == bpmn_process_dict_version_4_from_spiff
 
         bpmn_process_cache_version_4 = {
@@ -220,11 +224,11 @@ class TestProcessInstanceMigrator(BaseTest):
         assert tasks[0].state == "STARTED"
 
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance.id).first()
-        processor = ProcessInstanceProcessor(process_instance)
-        # save the processor so it creates the human tasks
-        processor.save()
-        self.complete_next_manual_task(processor, execution_mode="synchronous")
-        self.complete_next_manual_task(processor, execution_mode="synchronous")
+        runtime = ProcessInstanceRuntime(process_instance)
+        # save the runtime so it creates the human tasks
+        runtime.save()
+        self.complete_next_manual_task(runtime, execution_mode="synchronous")
+        self.complete_next_manual_task(runtime, execution_mode="synchronous")
         assert process_instance.status == ProcessInstanceStatus.complete.value
 
     def _import_bpmn_json_for_test(
@@ -242,7 +246,7 @@ class TestProcessInstanceMigrator(BaseTest):
             bpmn_process_dict_before_import = json.loads(f.read())
         process_instance = self.create_process_instance_from_process_model(process_model=process_model)
 
-        ProcessInstanceProcessor.persist_bpmn_process_dict(
+        ProcessInstancePersistenceService.persist_bpmn_process_dict(
             bpmn_process_dict_before_import,
             process_instance_model=process_instance,
             bpmn_definition_to_task_definitions_mappings={},
@@ -250,10 +254,10 @@ class TestProcessInstanceMigrator(BaseTest):
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance.id).first()
 
         # ensure data was imported correctly and is in expected state
-        processor = ProcessInstanceProcessor(
+        runtime = ProcessInstanceRuntime(
             process_instance, include_task_data_for_completed_tasks=True, include_completed_subprocesses=True
         )
-        bpmn_process_dict_version_3_after_import = processor.serialize(serialize_script_engine_state=False)
+        bpmn_process_dict_version_3_after_import = runtime.serialize(serialize_script_engine_state=False)
         self.round_last_state_change(bpmn_process_dict_before_import)
         self.round_last_state_change(bpmn_process_dict_version_3_after_import)
         if assert_match:

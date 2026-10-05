@@ -1,4 +1,9 @@
+import json
 import logging
+import sys
+from pathlib import Path
+from threading import Event
+from unittest.mock import patch
 from uuid import UUID
 
 from flask.app import Flask
@@ -6,18 +11,163 @@ from starlette.testclient import TestClient
 
 from spiffworkflow_backend.models.process_instance import ProcessInstanceModel
 from spiffworkflow_backend.models.user import UserModel
-from spiffworkflow_backend.services.authorization_service import AuthorizationService
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.logging_service import SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR
+from spiffworkflow_backend.services.logging_service import SpiffLogHandler
+from spiffworkflow_backend.services.logging_service import configure_celery_stdout_logger
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
 from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
 
 
 class TestLoggingService(BaseTest):
+    @staticmethod
+    def spiff_event_record() -> logging.LogRecord:
+        record = logging.LogRecord(
+            name="spiff.event",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg="task_completed",
+            args=(),
+            exc_info=None,
+        )
+        record.__dict__["_spiff_data"] = {"process_instance_id": 123}
+        return record
+
+    def test_configure_celery_stdout_logger_bypasses_redirected_streams(self) -> None:
+        logger = logging.Logger("celery-test")
+        logger.addHandler(logging.NullHandler())
+        formatter = logging.Formatter("%(message)s")
+
+        configure_celery_stdout_logger(logger, formatter, logging.INFO)
+
+        assert len(logger.handlers) == 1
+        assert isinstance(logger.handlers[0], logging.StreamHandler)
+        assert logger.handlers[0].stream is (sys.__stdout__ or sys.stdout)
+        assert logger.handlers[0].formatter is formatter
+        assert logger.handlers[0].level == logging.INFO
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+
     def test_logger_setup_disables_propagation(self, app: Flask) -> None:
         logger = logging.getLogger("spiffworkflow_backend.services.service_task_delegate")
         assert logger.handlers
         assert logger.propagate is False
+
+    def test_spiff_log_handler_formats_unix_timestamp(self, app: Flask) -> None:
+        handler = SpiffLogHandler(app)
+        try:
+            with patch("spiffworkflow_backend.services.logging_service.time.time", return_value=1770000000.125):
+                payload = json.loads(handler.format(self.spiff_event_record()))
+            assert payload["timestamp"] == 1770000000.125
+        finally:
+            handler.close()
+
+    def test_spiff_log_handler_skips_internal_diagnostic_records(self, app: Flask) -> None:
+        handler = SpiffLogHandler(app)
+        record = logging.LogRecord(
+            name="spiff.event",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=0,
+            msg="diagnostic",
+            args=(),
+            exc_info=None,
+        )
+        setattr(record, SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR, True)
+
+        assert handler.filter(record) is False
+
+    def test_socket_failure_warning_marks_record_to_skip_spiff_log_handler(self, app: Flask) -> None:
+        handler = SpiffLogHandler(app)
+
+        with patch.object(app.logger, "warning") as warning:
+            handler.log_socket_failure(OSError("event stream unavailable"), None)
+
+        warning.assert_called_once()
+        extra = warning.call_args.kwargs["extra"]
+        assert extra[SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR] is True
+
+    def test_spiff_log_handler_retains_the_same_payload_after_socket_failure(self, app: Flask) -> None:
+        handler = SpiffLogHandler(app)
+        with (
+            patch.object(handler, "send", side_effect=[False, True]) as send,
+            patch.object(handler, "start_retry_thread"),
+        ):
+            handler.emit(self.spiff_event_record())
+            assert len(handler.pending_events) == 1
+
+            retained_payload = handler.pending_events[0]
+            handler.flush_pending()
+
+        assert not handler.pending_events
+        assert send.call_args_list[0].args[0] == retained_payload
+        assert send.call_args_list[1].args[0] == retained_payload
+        handler.close()
+
+    def test_spiff_log_handler_pause_file_holds_events_without_sending(
+        self,
+        app: Flask,
+        tmp_path: Path,
+    ) -> None:
+        pause_file = tmp_path / "event-stream-paused"
+        pause_file.touch()
+        handler = SpiffLogHandler(app)
+        handler.pause_file = str(pause_file)
+
+        with (
+            patch.object(handler, "send", return_value=True) as send,
+            patch.object(handler, "start_retry_thread"),
+        ):
+            handler.emit(self.spiff_event_record())
+            send.assert_not_called()
+            assert len(handler.pending_events) == 1
+
+            pause_file.unlink()
+            handler.flush_pending()
+
+        send.assert_called_once()
+        assert not handler.pending_events
+        handler.close()
+
+    def test_spiff_log_handler_retry_thread_flushes_after_pause_is_removed(
+        self,
+        app: Flask,
+        tmp_path: Path,
+    ) -> None:
+        pause_file = tmp_path / "event-stream-paused"
+        pause_file.touch()
+        delivered = Event()
+        handler = SpiffLogHandler(app)
+        handler.pause_file = str(pause_file)
+        handler.retry_interval_seconds = 0.01
+
+        def send_and_mark_delivered(*_args: object) -> bool:
+            delivered.set()
+            return True
+
+        with patch.object(handler, "send", side_effect=send_and_mark_delivered):
+            handler.emit(self.spiff_event_record())
+            assert len(handler.pending_events) == 1
+
+            pause_file.unlink()
+            assert delivered.wait(timeout=1)
+
+        handler.acquire()
+        handler.release()
+        assert not handler.pending_events
+        handler.close()
+
+    def test_spiff_log_handler_close_flushes_pending_events(self, app: Flask) -> None:
+        handler = SpiffLogHandler(app)
+        handler.pending_events.append(b'{"id":"event-on-shutdown"}\n')
+
+        with patch.object(handler, "send", return_value=True) as send:
+            handler.close()
+
+        send.assert_called_once()
+        assert not handler.pending_events
 
     def test_logging_service_detailed_logs(
         self,
@@ -28,23 +178,21 @@ class TestLoggingService(BaseTest):
     ) -> None:
         initiator_user = self.find_or_create_user("initiator_user")
         assert initiator_user.principal is not None
-        AuthorizationService.import_permissions_from_yaml_file()
-
         process_model = load_test_spec(
             process_model_id="misc/category_number_one/simple_form",
             process_model_source_directory="simple_form",
         )
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=initiator_user)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
 
         assert len(process_instance.active_human_tasks) == 1
         human_task = process_instance.active_human_tasks[0]
         assert len(human_task.potential_owners) == 1
         assert human_task.potential_owners[0] == initiator_user
 
-        spiff_task = processor.__class__.get_task_by_bpmn_identifier(human_task.task_name, processor.bpmn_process_instance)
-        ProcessInstanceService.complete_form_task(processor, spiff_task, {"name": "HEY"}, initiator_user, human_task)
+        spiff_task = runtime.__class__.get_task_by_bpmn_identifier(human_task.task_name, runtime.bpmn_process_instance)
+        ProcessInstanceService.complete_form_task(runtime, spiff_task, {"name": "HEY"}, initiator_user, human_task)
 
         headers = self.logged_in_headers(with_super_admin_user)
         log_response = client.get(
@@ -82,29 +230,27 @@ class TestLoggingService(BaseTest):
     ) -> None:
         initiator_user = self.find_or_create_user("initiator_user")
         assert initiator_user.principal is not None
-        AuthorizationService.import_permissions_from_yaml_file()
-
         process_model = load_test_spec(
             process_model_id="misc/category_number_one/simple_form",
             process_model_source_directory="simple_form",
         )
         process_instance = self.create_process_instance_from_process_model(process_model=process_model, user=initiator_user)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
 
         assert len(process_instance.active_human_tasks) == 1
         human_task = process_instance.active_human_tasks[0]
         assert len(human_task.potential_owners) == 1
         assert human_task.potential_owners[0] == initiator_user
 
-        spiff_task = processor.__class__.get_task_by_bpmn_identifier(human_task.task_name, processor.bpmn_process_instance)
-        ProcessInstanceService.complete_form_task(processor, spiff_task, {"name": "HEY"}, initiator_user, human_task)
+        spiff_task = runtime.__class__.get_task_by_bpmn_identifier(human_task.task_name, runtime.bpmn_process_instance)
+        ProcessInstanceService.complete_form_task(runtime, spiff_task, {"name": "HEY"}, initiator_user, human_task)
 
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance.id).first()
-        processor = ProcessInstanceProcessor(process_instance)
+        runtime = ProcessInstanceRuntime(process_instance)
         human_task_one = process_instance.active_human_tasks[0]
-        spiff_manual_task = processor.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
-        ProcessInstanceService.complete_form_task(processor, spiff_manual_task, {}, initiator_user, human_task_one)
+        spiff_manual_task = runtime.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
+        ProcessInstanceService.complete_form_task(runtime, spiff_manual_task, {}, initiator_user, human_task_one)
 
         headers = self.logged_in_headers(with_super_admin_user)
         log_response = client.get(

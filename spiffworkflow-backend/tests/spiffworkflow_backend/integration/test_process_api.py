@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import time
+import uuid
 from hashlib import sha256
 from typing import Any
 from unittest.mock import patch
@@ -28,12 +29,13 @@ from spiffworkflow_backend.models.process_instance_report import ProcessInstance
 from spiffworkflow_backend.models.process_instance_report import ReportMetadata
 from spiffworkflow_backend.models.process_model import NotificationType
 from spiffworkflow_backend.models.reference_cache import ReferenceCacheModel
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
+from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.models.user import UserModel
+from spiffworkflow_backend.services.authorization_service import AuthorizationService
 from spiffworkflow_backend.services.file_system_service import FileSystemService
 from spiffworkflow_backend.services.message_service import MessageService
 from spiffworkflow_backend.services.process_caller_service import ProcessCallerService
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
 from spiffworkflow_backend.services.process_model_service import ProcessModelService
 from spiffworkflow_backend.services.user_service import UserService
@@ -1093,6 +1095,12 @@ class TestProcessApi(BaseTest):
             xml_file_contents = f_open.read()
             assert show_response.json()["bpmn_xml_file_contents"] == xml_file_contents
 
+        wrong_model_response = client.get(
+            f"/v1.0/process-instances/wrong:model/{process_instance_id}",
+            headers=headers,
+        )
+        assert wrong_model_response.status_code == 404
+
     def test_process_instance_show_with_specified_process_identifier(
         self,
         app: Flask,
@@ -1181,8 +1189,8 @@ class TestProcessApi(BaseTest):
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
         assert process_instance
 
-        processor = ProcessInstanceProcessor(process_instance)
-        process_instance_data = processor.get_data()
+        runtime = ProcessInstanceRuntime(process_instance)
+        process_instance_data = runtime.get_data()
         assert process_instance_data
         assert process_instance_data["invoice"] == payload
 
@@ -1229,19 +1237,19 @@ class TestProcessApi(BaseTest):
         assert response.json() is not None
 
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        task = processor.get_all_user_tasks()[0]
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        task = runtime.get_all_user_tasks()[0]
         human_task = process_instance.active_human_tasks[0]
 
         ProcessInstanceService.complete_form_task(
-            processor,
+            runtime,
             task,
             payload,
             with_super_admin_user,
             human_task,
         )
-        processor.save()
+        runtime.save()
 
         response = client.post(
             f"/v1.0/messages/{message_model_identifier}",
@@ -1257,8 +1265,8 @@ class TestProcessApi(BaseTest):
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
         assert process_instance
 
-        processor = ProcessInstanceProcessor(process_instance)
-        process_instance_data = processor.get_data()
+        runtime = ProcessInstanceRuntime(process_instance)
+        process_instance_data = runtime.get_data()
         assert process_instance_data
         assert process_instance_data["the_payload"] == payload
 
@@ -1452,9 +1460,9 @@ class TestProcessApi(BaseTest):
         assert response.json() is not None
 
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        task = processor.get_all_user_tasks()[0]
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        task = runtime.get_all_user_tasks()[0]
         human_task = process_instance.active_human_tasks[0]
 
         invoice_payload = {
@@ -1464,14 +1472,14 @@ class TestProcessApi(BaseTest):
             "description": "But seriously.",
         }
         ProcessInstanceService.complete_form_task(
-            processor,
+            runtime,
             task,
             invoice_payload,
             with_super_admin_user,
             human_task,
             execution_mode=ProcessInstanceExecutionMode.synchronous.value,
         )
-        processor.save()
+        runtime.save()
 
         db.session.refresh(process_instance)
         assert process_instance.status == "complete"
@@ -1518,21 +1526,21 @@ class TestProcessApi(BaseTest):
         process_instance_id = response.json()["id"]
 
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        task = processor.get_all_user_tasks()[0]
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        task = runtime.get_all_user_tasks()[0]
         human_task = process_instance.active_human_tasks[0]
 
         ProcessInstanceService.complete_form_task(
-            processor,
+            runtime,
             task,
             payload,
             with_super_admin_user,
             human_task,
         )
-        processor.save()
+        runtime.save()
 
-        processor.suspend()
+        runtime.suspend()
         payload["description"] = "Message To Suspended"
         response = client.post(
             f"/v1.0/messages/{message_model_identifier}",
@@ -1543,7 +1551,7 @@ class TestProcessApi(BaseTest):
         assert response.json()
         assert response.json()["error_code"] == "message_not_accepted"
 
-        processor.resume()
+        runtime.resume()
         payload["description"] = "Message To Resumed"
         response = client.post(
             f"/v1.0/messages/{message_model_identifier}",
@@ -1557,12 +1565,12 @@ class TestProcessApi(BaseTest):
         process_instance_id = json_data["process_instance"]["id"]
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
         assert process_instance
-        processor = ProcessInstanceProcessor(process_instance)
-        process_instance_data = processor.get_data()
+        runtime = ProcessInstanceRuntime(process_instance)
+        process_instance_data = runtime.get_data()
         assert process_instance_data
         assert process_instance_data["the_payload"] == payload
 
-        processor.terminate()
+        runtime.terminate()
         response = client.post(
             f"/v1.0/messages/{message_model_identifier}",
             headers=self.logged_in_headers(with_super_admin_user, additional_headers={"Content-Type": "application/json"}),
@@ -1624,19 +1632,19 @@ class TestProcessApi(BaseTest):
         process_instance_id = response.json()["id"]
 
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
-        task = processor.get_all_user_tasks()[0]
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
+        task = runtime.get_all_user_tasks()[0]
         human_task = process_instance.active_human_tasks[0]
 
         ProcessInstanceService.complete_form_task(
-            processor,
+            runtime,
             task,
             payload,
             with_super_admin_user,
             human_task,
         )
-        processor.save()
+        runtime.save()
 
         for expected_content, digest in zip(file_contents, digests, strict=True):
             response = client.get(
@@ -1702,19 +1710,19 @@ class TestProcessApi(BaseTest):
             process_instance_id = response.json()["id"]
 
             process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
-            processor = ProcessInstanceProcessor(process_instance)
-            processor.do_engine_steps(save=True)
-            task = processor.get_all_user_tasks()[0]
+            runtime = ProcessInstanceRuntime(process_instance)
+            runtime.do_engine_steps(save=True)
+            task = runtime.get_all_user_tasks()[0]
             human_task = process_instance.active_human_tasks[0]
 
             ProcessInstanceService.complete_form_task(
-                processor,
+                runtime,
                 task,
                 payload,
                 with_super_admin_user,
                 human_task,
             )
-            processor.save()
+            runtime.save()
 
             for expected_content, digest in zip(file_contents, digests, strict=True):
                 response = client.get(
@@ -2206,8 +2214,8 @@ class TestProcessApi(BaseTest):
         )
         assert response.status_code == 400
         assert process_instance.status == "error"
-        processor = ProcessInstanceProcessor(process_instance, include_task_data_for_completed_tasks=True)
-        spiff_task = processor.get_task_by_bpmn_identifier("script_task_two", processor.bpmn_process_instance)
+        runtime = ProcessInstanceRuntime(process_instance, include_task_data_for_completed_tasks=True)
+        spiff_task = runtime.get_task_by_bpmn_identifier("script_task_two", runtime.bpmn_process_instance)
         assert spiff_task is not None
 
         assert spiff_task.state == TaskState.ERROR
@@ -2608,6 +2616,72 @@ class TestProcessApi(BaseTest):
         ).first()
         assert task_event is not None
 
+    def test_task_submit_with_missing_runtime_task_does_not_error_instance(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+        with_super_admin_user: UserModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A missing runtime task answers empty_task without erroring the instance."""
+        bpmn_file_name = "manual_task.bpmn"
+        bpmn_file_location = "manual_task"
+        process_model = self.create_group_and_model_with_bpmn(
+            client=client,
+            user=with_super_admin_user,
+            process_model_id="manual_task",
+            bpmn_file_name=bpmn_file_name,
+            bpmn_file_location=bpmn_file_location,
+        )
+
+        bpmn_file_data_bytes = self.get_test_data_file_contents(bpmn_file_name, bpmn_file_location)
+        self.create_spec_file(
+            client=client,
+            process_model_id=process_model.id,
+            process_model_location=bpmn_file_location,
+            file_name=bpmn_file_name,
+            file_data=bpmn_file_data_bytes,
+            user=with_super_admin_user,
+        )
+
+        headers = self.logged_in_headers(with_super_admin_user)
+        response = self.create_process_instance_from_process_model_id_with_api(client, process_model.id, headers)
+        process_instance_id = response.json()["id"]
+
+        client.post(
+            f"/v1.0/process-instances/{self.modify_process_identifier_for_path_param(process_model.id)}/{process_instance_id}/run",
+            headers=headers,
+            json={},
+        )
+
+        # The authorization gate rejects unknown guids before the runtime is consulted, so bypass it
+        # to reach the missing-task branch. A human task row can exist while its runtime task is
+        # gone, for example when an interrupting boundary event skips the task.
+        monkeypatch.setattr(
+            AuthorizationService,
+            "assert_user_can_complete_human_task",
+            lambda *args, **kwargs: True,
+        )
+
+        response = client.put(
+            f"/v1.0/tasks/{process_instance_id}/{uuid.uuid4()}",
+            headers=self.logged_in_headers(with_super_admin_user, additional_headers={"Content-Type": "application/json"}),
+            json={},
+        )
+        assert response.status_code == 500, response.json()
+        assert response.json()["error_code"] == "empty_task"
+
+        process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
+        assert process_instance is not None
+        assert process_instance.status == ProcessInstanceStatus.user_input_required.value
+
+        error_event = ProcessInstanceEventModel.query.filter_by(
+            process_instance_id=process_instance_id,
+            event_type=ProcessInstanceEventType.process_instance_error.value,
+        ).first()
+        assert error_event is None
+
     def setup_initial_groups_for_move_tests(self, client: TestClient, with_super_admin_user: UserModel) -> None:
         groups = ["group_a", "group_b", "group_b/group_bb"]
         # setup initial groups
@@ -2856,8 +2930,8 @@ class TestProcessApi(BaseTest):
             process_model=process_model, user=with_super_admin_user
         )
 
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
         process_instance_metadata = ProcessInstanceMetadataModel.query.filter_by(process_instance_id=process_instance.id).all()
         assert len(process_instance_metadata) == 3
 
@@ -3047,6 +3121,51 @@ class TestProcessApi(BaseTest):
             expect_to_find_instance=False,
         )
 
+    def test_can_get_process_instance_list_with_numeric_process_metadata_range_filter(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+        with_super_admin_user: UserModel,
+    ) -> None:
+        process_model = load_test_spec(
+            process_model_id="save_process_instance_metadata/save_process_instance_metadata",
+            bpmn_file_name="save_process_instance_metadata.bpmn",
+            process_model_source_directory="save_process_instance_metadata",
+        )
+
+        matching_process_instance = self.create_process_instance_with_synthetic_metadata(
+            process_model=process_model, process_instance_metadata_dict={"key1": "100"}
+        )
+        self.create_process_instance_with_synthetic_metadata(
+            process_model=process_model, process_instance_metadata_dict={"key1": "50"}
+        )
+        self.create_process_instance_with_synthetic_metadata(
+            process_model=process_model, process_instance_metadata_dict={"key1": "not-a-number"}
+        )
+
+        report_metadata: ReportMetadata = {
+            "columns": [
+                {"Header": "ID", "accessor": "id", "filterable": False},
+                {"Header": "Key one", "accessor": "key1", "filterable": False},
+            ],
+            "order_by": ["status"],
+            "filter_by": [
+                {"field_name": "key1", "field_value": 75, "operator": "greater_than_or_equal_to"},
+                {"field_name": "key1", "field_value": 125, "operator": "less_than"},
+            ],
+        }
+        process_instance_report = ProcessInstanceReportModel.create_report(
+            "test_metadata_numeric_range", with_super_admin_user, report_metadata
+        )
+        response = self.post_to_process_instance_list(
+            client, with_super_admin_user, report_metadata=process_instance_report.get_report_metadata()
+        )
+
+        assert len(response.json()["results"]) == 1
+        assert response.json()["results"][0]["id"] == matching_process_instance.id
+        assert response.json()["results"][0]["key1"] == "100"
+
     def test_can_get_process_instance_list_with_report_metadata_and_process_initiator(
         self,
         app: Flask,
@@ -3131,8 +3250,8 @@ class TestProcessApi(BaseTest):
             process_model=process_model, user=with_super_admin_user
         )
 
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
         process_instance_metadata = ProcessInstanceMetadataModel.query.filter_by(process_instance_id=process_instance.id).all()
         assert len(process_instance_metadata) == 2
 
@@ -3155,8 +3274,8 @@ class TestProcessApi(BaseTest):
             process_model=process_model, user=with_super_admin_user
         )
 
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
         process_instance_metadata = ProcessInstanceMetadataModel.query.filter_by(process_instance_id=process_instance.id).all()
         assert len(process_instance_metadata) == 3
 
@@ -3238,12 +3357,12 @@ class TestProcessApi(BaseTest):
         )
 
         process_instance_one = self.create_process_instance_from_process_model(process_model)
-        processor = ProcessInstanceProcessor(process_instance_one)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance_one)
+        runtime.do_engine_steps(save=True)
         assert process_instance_one.status == "complete"
         process_instance_two = self.create_process_instance_from_process_model(process_model)
-        processor = ProcessInstanceProcessor(process_instance_two)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance_two)
+        runtime.do_engine_steps(save=True)
         assert process_instance_two.status == "complete"
 
         report_metadata: ReportMetadata = {
@@ -3300,8 +3419,8 @@ class TestProcessApi(BaseTest):
             process_model_source_directory="data_object_test",
         )
         process_instance_one = self.create_process_instance_from_process_model(process_model)
-        processor = ProcessInstanceProcessor(process_instance_one)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance_one)
+        runtime.do_engine_steps(save=True)
         assert process_instance_one.status == "user_input_required"
 
         response = client.get(
@@ -3325,7 +3444,7 @@ class TestProcessApi(BaseTest):
             process_model_source_directory="with-service-task-call-activity-sub-process",
         )
         process_instance_one = self.create_process_instance_from_process_model(process_model)
-        processor = ProcessInstanceProcessor(process_instance_one)
+        runtime = ProcessInstanceRuntime(process_instance_one)
         connector_response = {
             "body": '{"ok": true}',
             "mimetype": "application/json",
@@ -3336,9 +3455,9 @@ class TestProcessApi(BaseTest):
             mock_post.return_value.status_code = 200
             mock_post.return_value.ok = True
             mock_post.return_value.text = json.dumps(connector_response)
-            processor.do_engine_steps(save=True)
-        self.complete_next_manual_task(processor, execution_mode="synchronous")
-        self.complete_next_manual_task(processor, execution_mode="synchronous", data={"firstName": "Chuck"})
+            runtime.do_engine_steps(save=True)
+        self.complete_next_manual_task(runtime, execution_mode="synchronous")
+        self.complete_next_manual_task(runtime, execution_mode="synchronous", data={"firstName": "Chuck"})
         assert process_instance_one.status == "complete"
 
         process_identifier = "call_activity_sub_process"
@@ -3374,8 +3493,8 @@ class TestProcessApi(BaseTest):
             process_model_source_directory="data-object-in-subprocess",
         )
         process_instance_one = self.create_process_instance_from_process_model(process_model)
-        processor = ProcessInstanceProcessor(process_instance_one)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance_one)
+        runtime.do_engine_steps(save=True)
         assert process_instance_one.status == "complete"
 
         process_identifier = "subprocess2"

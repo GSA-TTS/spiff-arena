@@ -1,7 +1,7 @@
 import { Box, CircularProgress } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import HttpService from '../../services/HttpService';
 import CustomForm from '../../components/CustomForm';
@@ -116,9 +116,9 @@ export default function PublicForm() {
           <ErrorDisplayStateless errorObject={currentPageError} />
           <p>
             Go to{' '}
-            <a href="/" data-testid="public-home-link">
+            <Link to="/" data-testid="public-home-link">
               {t('home')}
-            </a>
+            </Link>
           </p>
         </>
       );
@@ -177,7 +177,7 @@ export default function PublicForm() {
     const style = { margin: '50px 0 50px 50px' };
     return (
       <Box sx={style}>
-        <CircularProgress />
+        <CircularProgress aria-label={t('loading')} />
       </Box>
     );
   };

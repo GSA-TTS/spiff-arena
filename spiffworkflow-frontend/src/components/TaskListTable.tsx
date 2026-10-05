@@ -25,6 +25,7 @@ import { PaginationObject, ProcessInstanceTask, Task } from '../interfaces';
 import CustomForm from './CustomForm';
 import InstructionsForEndUser from './InstructionsForEndUser';
 import DateAndTimeService from '../services/DateAndTimeService';
+import FormattedDateTime from './FormattedDateTime';
 
 type OwnProps = {
   apiPath: string;
@@ -191,7 +192,8 @@ export default function TaskListTable({
               width: '80%',
               maxWidth: 800,
               bgcolor: 'background.paper',
-              border: '2px solid #000',
+              border: '2px solid',
+              borderColor: 'divider',
               boxShadow: 24,
               p: 4,
               borderRadius: 2,
@@ -303,8 +305,9 @@ export default function TaskListTable({
     ) {
       actions.push(
         <Button
+          component={Link}
           variant="contained"
-          href={taskUrl}
+          to={taskUrl}
           disabled={!hasAccessToCompleteTask}
           size="small"
         >
@@ -359,9 +362,9 @@ export default function TaskListTable({
     if (showDateStarted) {
       rowElements.push(
         <TableCell>
-          {DateAndTimeService.convertSecondsToFormattedDateTime(
-            processInstanceTask.created_at_in_seconds,
-          ) || '-'}
+          <FormattedDateTime
+            seconds={processInstanceTask.created_at_in_seconds}
+          />
         </TableCell>,
       );
     }
@@ -369,7 +372,7 @@ export default function TaskListTable({
       rowElements.push(
         <TableCell
           title={
-            DateAndTimeService.convertSecondsToFormattedDateTime(
+            DateAndTimeService.convertSecondsToFormattedDateTimeWithTimezone(
               processInstanceTask.updated_at_in_seconds,
             ) || '-'
           }
@@ -460,7 +463,7 @@ export default function TaskListTable({
         <PaginationForTable
           page={page}
           perPage={perPage}
-          perPageOptions={[2, defaultPerPage, 25]}
+          perPageOptions={[defaultPerPage, 25]}
           pagination={pagination}
           tableToDisplay={buildTable()}
           paginationQueryParamPrefix={paginationQueryParamPrefix}

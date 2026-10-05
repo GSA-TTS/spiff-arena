@@ -2,26 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import { Close, AddAlt } from '@carbon/icons-react';
-import {
-  Button,
-  ButtonSet,
-  DatePicker,
-  DatePickerInput,
-  Dropdown,
-  Grid,
-  Column,
-  MultiSelect,
-  TimePicker,
-  Tag,
-  Modal,
-  ComboBox,
-  TextInput,
-  FormLabel,
-} from '@carbon/react';
+import { Add, Close } from '@mui/icons-material';
 
 import {
-  Button as MuiButton,
+  Button,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -34,17 +18,20 @@ import {
   MenuItem,
   Autocomplete,
   TextField,
+  Stack,
+  Chip,
+  IconButton,
+  FormLabel,
 } from '@mui/material';
+import Grid from '@mui/material/Grid';
 import { useDebouncedCallback } from 'use-debounce';
+import { PROCESS_STATUSES } from '../config';
 import {
-  PROCESS_STATUSES,
-  DATE_FORMAT_CARBON,
-  DATE_FORMAT_FOR_DISPLAY,
-} from '../config';
-import {
+  buildUniqueMilestoneNamesPath,
   getKeyByValue,
   getPageInfoFromSearchParams,
   getProcessStatus,
+  mergeSelectedStringOption,
   titleizeString,
   truncateString,
 } from '../helpers';
@@ -70,7 +57,7 @@ import {
 } from '../interfaces';
 
 // MUI
-import ProcessModelSearch from './ProcessModelSearchCarbon';
+import ProcessModelSearch from './ProcessModelSearch';
 
 import ProcessInstanceReportSearch from './ProcessInstanceReportSearch';
 import ProcessInstanceListDeleteReport from './ProcessInstanceListDeleteReport';
@@ -82,6 +69,9 @@ import { Can } from '../contexts/Can';
 import Filters from './Filters';
 import DateAndTimeService from '../services/DateAndTimeService';
 import ProcessInstanceListTable from './ProcessInstanceListTable';
+import ProcessInstanceGroupByModel from './ProcessInstanceGroupByModel';
+import QuickFilterChips from './QuickFilterChips';
+import TimeRangeFilter from './TimeRangeFilter';
 
 type OwnProps = {
   filtersEnabled?: boolean;
@@ -129,16 +119,25 @@ export default function ProcessInstanceListTableWithFilters({
   const { t } = useTranslation();
   const { targetUris } = useUriListForPermissions();
   const permissionRequestData: PermissionsToCheck = {
+    [targetUris.processInstanceUniqueMilestoneNamesPath]: ['GET'],
     [targetUris.userSearch]: ['GET'],
   };
   const { ability, permissionsLoaded } = usePermissionFetcher(
     permissionRequestData,
   );
   const canSearchUsers: boolean = ability.can('GET', targetUris.userSearch);
+  const canReadUniqueMilestoneNames: boolean = ability.can(
+    'GET',
+    targetUris.processInstanceUniqueMilestoneNamesPath,
+  );
 
   const [reportMetadata, setReportMetadata] = useState<ReportMetadata | null>(
     null,
   );
+  const [groupBy, setGroupBy] = useState<'none' | 'process_group'>('none');
+  const [activeQuickFilterByField, setActiveQuickFilterByField] = useState<
+    Record<string, string>
+  >({});
 
   const MAX_ITEMS_IN_DROPDOWN_FOR_USABILITY = 15;
 
@@ -150,12 +149,6 @@ export default function ProcessInstanceListTableWithFilters({
   const [startToTime, setStartToTime] = useState<string>('');
   const [endFromTime, setEndFromTime] = useState<string>('');
   const [endToTime, setEndToTime] = useState<string>('');
-  const [startFromTimeInvalid, setStartFromTimeInvalid] =
-    useState<boolean>(false);
-  const [startToTimeInvalid, setStartToTimeInvalid] = useState<boolean>(false);
-  const [endFromTimeInvalid, setEndFromTimeInvalid] = useState<boolean>(false);
-  const [endToTimeInvalid, setEndToTimeInvalid] = useState<boolean>(false);
-
   const [showFilterOptions, setShowFilterOptions] = useState<boolean>(false);
   const [lastColumnFilter, setLastColumnFilter] = useState<string>('');
 
@@ -226,6 +219,29 @@ export default function ProcessInstanceListTableWithFilters({
     string | null
   >(null);
   const [lastMilestones, setLastMilestones] = useState<string[]>([]);
+  const uniqueMilestoneNamesRequestId = useRef(0);
+  const hasLoadedReportMetadata = reportMetadata !== null;
+  const processModelIdentifierForMilestoneNames = useMemo(() => {
+    if (!reportMetadata) {
+      return null;
+    }
+    const processModelFilter = reportMetadata.filter_by.find(
+      (reportFilter: ReportFilter) =>
+        reportFilter.field_name === 'process_model_identifier' &&
+        typeof reportFilter.field_value === 'string',
+    );
+    return (processModelFilter?.field_value as string) || null;
+  }, [reportMetadata]);
+  const uniqueMilestoneNamesPath = useMemo(() => {
+    return buildUniqueMilestoneNamesPath({
+      variant,
+      withRelationToMe,
+      processModelIdentifier: processModelIdentifierForMilestoneNames,
+    });
+  }, [processModelIdentifierForMilestoneNames, variant, withRelationToMe]);
+  const availableLastMilestones = useMemo(() => {
+    return mergeSelectedStringOption(lastMilestones, selectedLastMilestone);
+  }, [lastMilestones, selectedLastMilestone]);
   const systemReportOptions: string[] = useMemo(() => {
     return [
       'instances_with_tasks_waiting_for_me',
@@ -263,6 +279,7 @@ export default function ProcessInstanceListTableWithFilters({
   const processModelSelectionItemsForUseEffect = useRef<ProcessModel[]>([]);
 
   const clearFilters = useCallback(() => {
+    setActiveQuickFilterByField({});
     setEndFromDate('');
     setEndFromTime('');
     setEndToDate('');
@@ -456,15 +473,6 @@ export default function ProcessInstanceListTableWithFilters({
       );
       setProcessStatusAllOptions(processStatusAllOptionsArray);
 
-      // Fetch distinct milestone values for filtering
-      HttpService.makeCallToBackend({
-        path: `/process-instances/unique-milestone-names`,
-        httpMethod: 'GET',
-        successCallback: (lastMilestoneArray: string[]) => {
-          setLastMilestones(lastMilestoneArray.sort());
-        },
-      });
-
       getReportMetadataWithReportHash();
     }
     const checkFiltersAndRun = () => {
@@ -488,6 +496,38 @@ export default function ProcessInstanceListTableWithFilters({
     // watch the variant prop so when switching between the "For Me" and "All" pi list tables
     // the api call to find the new process instances is made and the report metadata is updated.
     variant,
+  ]);
+
+  useEffect(() => {
+    const requestId = uniqueMilestoneNamesRequestId.current + 1;
+    uniqueMilestoneNamesRequestId.current = requestId;
+
+    if (!filtersEnabled || !permissionsLoaded) {
+      return;
+    }
+    if (!canReadUniqueMilestoneNames) {
+      setLastMilestones([]);
+      return;
+    }
+    if (!hasLoadedReportMetadata) {
+      return;
+    }
+    HttpService.makeCallToBackend({
+      path: uniqueMilestoneNamesPath,
+      httpMethod: 'GET',
+      successCallback: (lastMilestoneArray: string[]) => {
+        if (uniqueMilestoneNamesRequestId.current !== requestId) {
+          return;
+        }
+        setLastMilestones(lastMilestoneArray.sort());
+      },
+    });
+  }, [
+    canReadUniqueMilestoneNames,
+    filtersEnabled,
+    hasLoadedReportMetadata,
+    permissionsLoaded,
+    uniqueMilestoneNamesPath,
   ]);
 
   const removeFieldFromReportMetadata = (
@@ -547,6 +587,94 @@ export default function ProcessInstanceListTableWithFilters({
     }
     const reportMetadataCopy = { ...reportMetadataToUse };
     setReportMetadata(reportMetadataCopy);
+  };
+
+  const syncWidgetStateForField = (fieldName: string, fieldValue: any) => {
+    if (fieldName === 'process_status') {
+      setProcessStatusSelection(
+        fieldValue ? String(fieldValue).split(',') : [],
+      );
+    } else if (dateParametersToAlwaysFilterBy[fieldName]) {
+      const [setDate, setTime] = dateParametersToAlwaysFilterBy[fieldName];
+      if (fieldValue) {
+        setDate(
+          DateAndTimeService.convertSecondsToFormattedDateString(fieldValue),
+        );
+        setTime(
+          DateAndTimeService.convertSecondsToFormattedTimeHoursMinutes(
+            fieldValue,
+          ),
+        );
+      } else {
+        setDate('');
+        setTime('');
+      }
+    }
+  };
+
+  const applyQuickFilter = (
+    addFilters: ReportFilter[],
+    clearFieldNames: string[],
+    presetId: string,
+    isActive: boolean,
+  ) => {
+    if (!reportMetadata) {
+      return;
+    }
+    setActiveQuickFilterByField((current) => {
+      const next = { ...current };
+      clearFieldNames.forEach((fieldName) => {
+        delete next[fieldName];
+        if (!isActive) {
+          next[fieldName] = presetId;
+        }
+      });
+      return next;
+    });
+    const next = { ...reportMetadata };
+    next.filter_by = reportMetadata.filter_by.filter(
+      (f: ReportFilter) => !clearFieldNames.includes(f.field_name),
+    );
+    clearFieldNames.forEach((fieldName) =>
+      syncWidgetStateForField(fieldName, null),
+    );
+    addFilters.forEach((f) => {
+      next.filter_by.push({ ...f });
+      syncWidgetStateForField(f.field_name, f.field_value);
+    });
+    validateStartAndEndSeconds(next.filter_by);
+    setReportMetadata(next);
+  };
+
+  const applyTimeRangeFilter = (
+    startTimestamp: number,
+    endTimestamp: number,
+  ) => {
+    if (!reportMetadata) {
+      return;
+    }
+    const dateFieldNames = ['start_from', 'start_to', 'end_from', 'end_to'];
+    const next = { ...reportMetadata };
+    next.filter_by = reportMetadata.filter_by.filter(
+      (filter: ReportFilter) => !dateFieldNames.includes(filter.field_name),
+    );
+    next.filter_by.push(
+      {
+        field_name: 'start_from',
+        field_value: startTimestamp,
+        operator: 'equals',
+      },
+      {
+        field_name: 'start_to',
+        field_value: endTimestamp,
+        operator: 'equals',
+      },
+    );
+    syncWidgetStateForField('start_from', startTimestamp);
+    syncWidgetStateForField('start_to', endTimestamp);
+    syncWidgetStateForField('end_from', null);
+    syncWidgetStateForField('end_to', null);
+    setReportMetadata(next);
   };
 
   const handleProcessInstanceInitiatorSearchResult = (
@@ -637,26 +765,35 @@ export default function ProcessInstanceListTableWithFilters({
   // re-rendered while the user is still typing. NOTE that we also prevented rerendering
   // with the use of the setErrorMessageSafely function. we are not sure why the context not
   // changing still causes things to rerender when we call its setter without our extra check.
-  const validateStartAndEndSeconds = () => {
-    const startFromSeconds =
-      DateAndTimeService.convertDateAndTimeStringsToSeconds(
-        startFromDate,
-        startFromTime || '00:00:00',
-      );
-    const startToSeconds =
-      DateAndTimeService.convertDateAndTimeStringsToSeconds(
-        startToDate,
-        startToTime || '00:00:00',
-      );
-    const endFromSeconds =
-      DateAndTimeService.convertDateAndTimeStringsToSeconds(
-        endFromDate,
-        endFromTime || '00:00:00',
-      );
-    const endToSeconds = DateAndTimeService.convertDateAndTimeStringsToSeconds(
-      endToDate,
-      endToTime || '00:00:00',
-    );
+  const filterValue = (filterBy: ReportFilter[], fieldName: string) => {
+    return filterBy.find((f) => f.field_name === fieldName)?.field_value;
+  };
+
+  const validateStartAndEndSeconds = (filterBy?: ReportFilter[]) => {
+    const startFromSeconds = filterBy
+      ? filterValue(filterBy, 'start_from')
+      : DateAndTimeService.convertDateAndTimeStringsToSeconds(
+          startFromDate,
+          startFromTime || '00:00:00',
+        );
+    const startToSeconds = filterBy
+      ? filterValue(filterBy, 'start_to')
+      : DateAndTimeService.convertDateAndTimeStringsToSeconds(
+          startToDate,
+          startToTime || '00:00:00',
+        );
+    const endFromSeconds = filterBy
+      ? filterValue(filterBy, 'end_from')
+      : DateAndTimeService.convertDateAndTimeStringsToSeconds(
+          endFromDate,
+          endFromTime || '00:00:00',
+        );
+    const endToSeconds = filterBy
+      ? filterValue(filterBy, 'end_to')
+      : DateAndTimeService.convertDateAndTimeStringsToSeconds(
+          endToDate,
+          endToTime || '00:00:00',
+        );
 
     let message = '';
     if (isTrueComparison(startFromSeconds, '>', startToSeconds)) {
@@ -685,89 +822,6 @@ export default function ProcessInstanceListTableWithFilters({
     return [];
   };
 
-  const dateComponent = (
-    labelTranslationKey: string,
-    name: any,
-    initialDate: any,
-    initialTime: string,
-    onChangeDateFunction: any,
-    onChangeTimeFunction: any,
-    timeInvalid: boolean,
-    setTimeInvalid: any,
-  ) => {
-    if (!reportMetadata) {
-      return null;
-    }
-    const propNameUnderscored = name.replaceAll('-', '_');
-    return (
-      <>
-        <DatePicker
-          id={`date-picker-parent-${name}`}
-          dateFormat={DATE_FORMAT_CARBON}
-          datePickerType="single"
-        >
-          <DatePickerInput
-            id={`date-picker-${name}`}
-            placeholder={DATE_FORMAT_FOR_DISPLAY}
-            labelText={t(labelTranslationKey)}
-            type="text"
-            size="md"
-            autocomplete="off"
-            allowInput={false}
-            onChange={(dateChangeEvent: any) => {
-              if (!initialDate && !initialTime) {
-                onChangeTimeFunction(
-                  DateAndTimeService.convertDateObjectToFormattedHoursMinutes(
-                    new Date(),
-                  ),
-                );
-              }
-              const newValue =
-                DateAndTimeService.convertDateAndTimeStringsToSeconds(
-                  dateChangeEvent.srcElement.value,
-                  initialTime || '00:00:00',
-                );
-              insertOrUpdateFieldInReportMetadata(
-                reportMetadata,
-                propNameUnderscored,
-                newValue,
-              );
-              onChangeDateFunction(dateChangeEvent.srcElement.value);
-              validateStartAndEndSeconds();
-            }}
-            value={initialDate}
-          />
-        </DatePicker>
-        <TimePicker
-          invalid={timeInvalid}
-          id={`time-picker-${name}`}
-          labelText={t('select_a_time')}
-          pattern="^([01]\d|2[0-3]):?([0-5]\d)$"
-          value={initialTime}
-          onChange={(event: any) => {
-            if (event.srcElement.validity.valid) {
-              setTimeInvalid(false);
-            } else {
-              setTimeInvalid(true);
-            }
-            const newValue =
-              DateAndTimeService.convertDateAndTimeStringsToSeconds(
-                initialDate,
-                event.srcElement.value,
-              );
-            insertOrUpdateFieldInReportMetadata(
-              reportMetadata,
-              propNameUnderscored,
-              newValue,
-            );
-            onChangeTimeFunction(event.srcElement.value);
-            validateStartAndEndSeconds();
-          }}
-        />
-      </>
-    );
-  };
-
   const formatProcessInstanceStatus = (_row: any, value: any) => {
     return getProcessStatus(value);
   };
@@ -777,25 +831,32 @@ export default function ProcessInstanceListTableWithFilters({
       return null;
     }
     return (
-      <MultiSelect
-        label={t('choose_status')}
-        className="our-class"
+      <Autocomplete
+        multiple
         id="process-instance-status-select"
-        titleText={t('status')}
-        items={processStatusAllOptions}
-        onChange={(selection: any) => {
+        options={processStatusAllOptions}
+        onChange={(_event, selectedItems) => {
+          setActiveQuickFilterByField((current) => {
+            const next = { ...current };
+            delete next.process_status;
+            return next;
+          });
           insertOrUpdateFieldInReportMetadata(
             reportMetadata,
             'process_status',
-            selection.selectedItems.join(','),
+            selectedItems.join(','),
           );
-          setProcessStatusSelection(selection.selectedItems);
+          setProcessStatusSelection(selectedItems);
         }}
-        itemToString={(item: any) => {
-          return formatProcessInstanceStatus(null, item);
-        }}
-        selectionFeedback="top-after-reopen"
-        selectedItems={processStatusSelection}
+        getOptionLabel={(item) => formatProcessInstanceStatus(null, item)}
+        value={processStatusSelection}
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            label={t('status')}
+            placeholder={t('choose_status')}
+          />
+        )}
       />
     );
   };
@@ -979,12 +1040,11 @@ export default function ProcessInstanceListTableWithFilters({
     return reportColumnForEditing;
   };
 
-  const updateReportColumn = (event: any) => {
+  const updateReportColumn = (selectedItem: ReportColumn | null) => {
     let reportColumnForEditing = null;
-    if (event.selectedItem) {
-      reportColumnForEditing = reportColumnToReportColumnForEditing(
-        event.selectedItem,
-      );
+    if (selectedItem) {
+      reportColumnForEditing =
+        reportColumnToReportColumnForEditing(selectedItem);
     }
     setReportColumnToOperateOn(reportColumnForEditing);
   };
@@ -1040,32 +1100,39 @@ export default function ProcessInstanceListTableWithFilters({
     const formElements = [];
     if (reportColumnFormMode === 'new') {
       formElements.push(
-        <ComboBox
-          onChange={updateReportColumn}
+        <Autocomplete
+          onChange={(_event, selectedItem) => updateReportColumn(selectedItem)}
           id="report-column-selection"
           key="report-column-selection"
           data-testid="report-column-selection"
-          data-modal-primary-focus
-          items={availableReportColumns}
-          itemToString={(reportColumn: ReportColumn) => {
-            if (reportColumn) {
-              return reportColumn.accessor;
-            }
-            return null;
-          }}
-          shouldFilterItem={shouldFilterReportColumn}
-          placeholder="Choose a column to show"
-          titleText="Column"
-          selectedItem={reportColumnToOperateOn}
+          options={availableReportColumns}
+          getOptionLabel={(reportColumn) => reportColumn.accessor || ''}
+          filterOptions={(options, state) =>
+            options.filter((option) =>
+              shouldFilterReportColumn({
+                item: option,
+                inputValue: state.inputValue,
+              }),
+            )
+          }
+          value={reportColumnToOperateOn}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Column"
+              placeholder="Choose a column to show"
+              autoFocus
+            />
+          )}
         />,
       );
     }
     formElements.push([
-      <TextInput
+      <TextField
         id="report-column-display-name"
         key="report-column-display-name"
         name="report-column-display-name"
-        labelText="Display Name"
+        label="Display Name"
         disabled={!reportColumnToOperateOn}
         value={reportColumnToOperateOn ? reportColumnToOperateOn.Header : ''}
         onChange={(event: any) => {
@@ -1081,21 +1148,26 @@ export default function ProcessInstanceListTableWithFilters({
     ]);
     if (reportColumnToOperateOn && reportColumnToOperateOn.filterable) {
       formElements.push(
-        <Dropdown
-          titleText={t('display_type')}
+        <TextField
+          select
           label={t('display_type')}
           id="report-column-display-type"
           key="report-column-display-type"
-          items={[''].concat(Object.values(filterDisplayTypes))}
-          selectedItem={
+          value={
             reportColumnToOperateOn.display_type
               ? filterDisplayTypes[reportColumnToOperateOn.display_type]
               : ''
           }
-          onChange={(value: any) => {
-            setFilterDisplayType(value.selectedItem);
+          onChange={(event) => {
+            setFilterDisplayType(event.target.value);
           }}
-        />,
+        >
+          {[''].concat(Object.values(filterDisplayTypes)).map((option) => (
+            <MenuItem key={option} value={option}>
+              {option || <em>None</em>}
+            </MenuItem>
+          ))}
+        </TextField>,
       );
 
       // if we pass undefined into selectedItem followed by an actual value then the component changes from uncontrolled
@@ -1107,16 +1179,24 @@ export default function ProcessInstanceListTableWithFilters({
         'id',
       );
       formElements.push(
-        <Dropdown
-          titleText={t('operator_label')}
+        <TextField
+          select
           label={t('operator_label')}
           id="report-column-condition-operator"
-          items={Object.keys(filterOperatorMappings)}
-          selectedItem={operator || null}
-          onChange={(value: any) => {
-            setReportColumnConditionOperator(value.selectedItem);
+          value={operator || ''}
+          onChange={(event) => {
+            setReportColumnConditionOperator(event.target.value);
           }}
-        />,
+        >
+          <MenuItem value="">
+            <em>None</em>
+          </MenuItem>
+          {Object.keys(filterOperatorMappings).map((option) => (
+            <MenuItem key={option} value={option}>
+              {option}
+            </MenuItem>
+          ))}
+        </TextField>,
       );
 
       const filterOperator = getFilterOperatorFromReportColumn(
@@ -1124,10 +1204,10 @@ export default function ProcessInstanceListTableWithFilters({
       );
       if (filterOperator && filterOperator.requires_value) {
         formElements.push(
-          <TextInput
+          <TextField
             id="report-column-condition-value"
             name="report-column-condition-value"
-            labelText={t('condition_value')}
+            label={t('condition_value')}
             value={
               reportColumnToOperateOn
                 ? reportColumnToOperateOn.filter_field_value
@@ -1150,18 +1230,29 @@ export default function ProcessInstanceListTableWithFilters({
               : '',
           });
     return (
-      <Modal
+      <Dialog
         open={showReportColumnForm}
-        modalHeading={modalHeading}
-        primaryButtonText={t('save')}
-        primaryButtonDisabled={!reportColumnToOperateOn}
-        onRequestSubmit={handleUpdateReportColumn}
-        onRequestClose={handleColumnFormClose}
-        hasScrollingContent
+        onClose={handleColumnFormClose}
         aria-label={modalHeading}
+        fullWidth
       >
-        {formElements}
-      </Modal>
+        <DialogTitle>{modalHeading}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            {formElements}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleColumnFormClose}>{t('cancel')}</Button>
+          <Button
+            variant="contained"
+            disabled={!reportColumnToOperateOn}
+            onClick={handleUpdateReportColumn}
+          >
+            {t('save')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     );
   };
 
@@ -1171,67 +1262,50 @@ export default function ProcessInstanceListTableWithFilters({
       reportColumns().forEach((reportColumn: ReportColumn) => {
         const reportColumnForEditing =
           reportColumnToReportColumnForEditing(reportColumn);
-
-        let tagType = 'cool-gray';
-        let tagTypeClass = '';
-        if (reportColumnForEditing.filterable) {
-          tagType = 'green';
-          tagTypeClass = 'tag-type-green';
-        }
         let reportColumnLabel = reportColumnForEditing.Header;
         if (reportColumnForEditing.filter_field_value) {
           reportColumnLabel = `${reportColumnLabel}=${reportColumnForEditing.filter_field_value}`;
         }
         tags.push(
-          <Column md={2} lg={2} sm={2}>
-            <Tag type={tagType} size="sm" className="filter-tag">
-              <Button
-                kind="ghost"
-                size="sm"
-                className={`button-tag ${tagTypeClass}`}
-                title={t('edit_column', {
-                  columnName: reportColumnForEditing.accessor,
-                })}
-                onClick={() => {
-                  setReportColumnToOperateOn(reportColumnForEditing);
-                  setShowReportColumnForm(true);
-                  setReportColumnFormMode('edit');
-                }}
-              >
-                {truncateString(reportColumnLabel, 10)}
-              </Button>
-              <Button
-                data-testid="remove-report-column"
-                renderIcon={Close}
-                iconDescription={t('remove_column')}
-                className={`button-tag-icon ${tagTypeClass}`}
-                hasIconOnly
-                size="sm"
-                kind="ghost"
-                onClick={() => removeColumn(reportColumnForEditing)}
-              />
-            </Tag>
-          </Column>,
+          <Grid key={reportColumn.accessor} size="auto">
+            <Chip
+              size="small"
+              color={reportColumnForEditing.filterable ? 'success' : 'default'}
+              className="filter-tag"
+              label={truncateString(reportColumnLabel, 10)}
+              title={t('edit_column', {
+                columnName: reportColumnForEditing.accessor,
+              })}
+              onClick={() => {
+                setReportColumnToOperateOn(reportColumnForEditing);
+                setShowReportColumnForm(true);
+                setReportColumnFormMode('edit');
+              }}
+              onDelete={() => removeColumn(reportColumnForEditing)}
+              deleteIcon={
+                <Close data-testid="remove-report-column" fontSize="small" />
+              }
+            />
+          </Grid>,
         );
       });
       return (
-        <Grid narrow fullWidth className="filter-buttons">
+        <Grid container spacing={1} className="filter-buttons">
           {tags}
-          <Column md={1} lg={1} sm={1}>
-            <Button
+          <Grid size="auto">
+            <IconButton
               data-testid="add-column-button"
-              renderIcon={AddAlt}
-              iconDescription={t('column_options')}
+              aria-label={t('column_options')}
               className="with-tiny-top-margin"
-              kind="ghost"
-              hasIconOnly
-              size="sm"
+              size="small"
               onClick={() => {
                 setShowReportColumnForm(true);
                 setReportColumnFormMode('new');
               }}
-            />
-          </Column>
+            >
+              <Add />
+            </IconButton>
+          </Grid>
         </Grid>
       );
     }
@@ -1292,7 +1366,7 @@ export default function ProcessInstanceListTableWithFilters({
               </div>
               {systemReport && (
                 <div style={{ marginLeft: '8px' }}>
-                  <Button
+                  <IconButton
                     onClick={() => {
                       systemReportOptions.forEach(
                         (systemReportOption: string) => {
@@ -1305,12 +1379,11 @@ export default function ProcessInstanceListTableWithFilters({
                       );
                       setSystemReport(null);
                     }}
-                    size="sm"
-                    kind="ghost"
-                    hasIconOnly
-                    renderIcon={Close}
-                    iconDescription={t('clear_filter')}
-                  />
+                    size="small"
+                    aria-label={t('clear_filter')}
+                  >
+                    <Close />
+                  </IconButton>
                 </div>
               )}
             </div>
@@ -1345,7 +1418,7 @@ export default function ProcessInstanceListTableWithFilters({
               </div>
               {selectedUserGroup && (
                 <div style={{ marginLeft: '8px' }}>
-                  <Button
+                  <IconButton
                     onClick={() => {
                       insertOrUpdateFieldInReportMetadata(
                         reportMetadata,
@@ -1354,12 +1427,11 @@ export default function ProcessInstanceListTableWithFilters({
                       );
                       setSelectedUserGroup(null);
                     }}
-                    size="sm"
-                    kind="ghost"
-                    hasIconOnly
-                    renderIcon={Close}
-                    iconDescription={t('clear_filter')}
-                  />
+                    size="small"
+                    aria-label={t('clear_filter')}
+                  >
+                    <Close />
+                  </IconButton>
                 </div>
               )}
             </div>
@@ -1367,11 +1439,12 @@ export default function ProcessInstanceListTableWithFilters({
           <FormControl fullWidth margin="normal">
             <div style={{ display: 'flex', alignItems: 'center' }}>
               <div style={{ flexGrow: 1 }}>
-                {lastMilestones.length > MAX_ITEMS_IN_DROPDOWN_FOR_USABILITY ? (
+                {availableLastMilestones.length >
+                MAX_ITEMS_IN_DROPDOWN_FOR_USABILITY ? (
                   <Autocomplete
                     disablePortal
                     id="last-milestone-autocomplete"
-                    options={lastMilestones}
+                    options={availableLastMilestones}
                     value={selectedLastMilestone}
                     getOptionLabel={(option) => option || ''}
                     renderOption={(props, option) => (
@@ -1418,7 +1491,7 @@ export default function ProcessInstanceListTableWithFilters({
                         setSelectedLastMilestone(value);
                       }}
                     >
-                      {lastMilestones.map((milestone) => (
+                      {availableLastMilestones.map((milestone) => (
                         <MenuItem key={milestone} value={milestone}>
                           {milestone}
                         </MenuItem>
@@ -1429,7 +1502,7 @@ export default function ProcessInstanceListTableWithFilters({
               </div>
               {selectedLastMilestone && (
                 <div style={{ marginLeft: '8px' }}>
-                  <Button
+                  <IconButton
                     onClick={() => {
                       insertOrUpdateFieldInReportMetadata(
                         reportMetadata,
@@ -1438,12 +1511,11 @@ export default function ProcessInstanceListTableWithFilters({
                       );
                       setSelectedLastMilestone(null);
                     }}
-                    size="sm"
-                    kind="ghost"
-                    hasIconOnly
-                    renderIcon={Close}
-                    iconDescription={t('clear_filter')}
-                  />
+                    size="small"
+                    aria-label={t('clear_filter')}
+                  >
+                    <Close />
+                  </IconButton>
                 </div>
               )}
             </div>
@@ -1485,13 +1557,30 @@ export default function ProcessInstanceListTableWithFilters({
           )}
         </DialogContent>
         <DialogActions>
-          <MuiButton onClick={handleAdvancedOptionsClose} color="primary">
+          <Button onClick={handleAdvancedOptionsClose} color="primary">
             {t('close')}
-          </MuiButton>
+          </Button>
         </DialogActions>
       </Dialog>
     );
   };
+
+  const groupByControl = (
+    <FormControl size="small" sx={{ minWidth: 180 }}>
+      <InputLabel id="group-by-label">{t('group_by')}</InputLabel>
+      <Select
+        labelId="group-by-label"
+        label={t('group_by')}
+        value={groupBy}
+        data-testid="process-instance-group-by"
+        sx={{ textAlign: 'left', '.MuiSelect-select': { textAlign: 'left' } }}
+        onChange={(e) => setGroupBy(e.target.value as 'none' | 'process_group')}
+      >
+        <MenuItem value="none">{t('group_by_none')}</MenuItem>
+        <MenuItem value="process_group">{t('group_by_process_group')}</MenuItem>
+      </Select>
+    </FormControl>
+  );
 
   const filterOptions = () => {
     if (!showFilterOptions || !reportMetadata) {
@@ -1516,33 +1605,31 @@ export default function ProcessInstanceListTableWithFilters({
 
     return (
       <>
-        <Grid fullWidth className="with-bottom-margin">
-          <Column md={8} lg={16} sm={4}>
+        <Grid container className="with-bottom-margin">
+          <Grid size={{ xs: 12 }}>
             <FormLabel>{t('columns_label')}</FormLabel>
             <br />
             {columnSelections()}
-          </Column>
+          </Grid>
         </Grid>
-        <Grid fullWidth className="with-bottom-margin">
-          <Column md={8}>
+        <Grid container spacing={2} className="with-bottom-margin">
+          <Grid size={{ xs: 12, md: 6 }}>
             <ProcessModelSearch
-              onChange={(selection: any) => {
-                const pmSelectionId = selection.selectedItem
-                  ? selection.selectedItem.id
-                  : null;
+              onChange={(selection: ProcessModel | null) => {
+                const pmSelectionId = selection ? selection.id : null;
                 insertOrUpdateFieldInReportMetadata(
                   reportMetadata,
                   'process_model_identifier',
                   pmSelectionId,
                 );
-                setProcessModelSelection(selection.selectedItem);
+                setProcessModelSelection(selection);
               }}
               processModels={processModelAvailableItems}
               selectedItem={processModelSelection}
               truncateProcessModelDisplayName
             />
-          </Column>
-          <Column md={4}>
+          </Grid>
+          <Grid size={{ xs: 12, md: 3 }}>
             <Can
               I="GET"
               a={targetUris.userSearch}
@@ -1552,30 +1639,37 @@ export default function ProcessInstanceListTableWithFilters({
               {(hasAccess: boolean) => {
                 if (hasAccess) {
                   return (
-                    <ComboBox
-                      onInputChange={addDebouncedSearchProcessInitiator}
-                      onChange={(event: any) => {
+                    <Autocomplete
+                      onInputChange={(_event, inputValue) =>
+                        addDebouncedSearchProcessInitiator(inputValue)
+                      }
+                      onChange={(_event, selectedItem) => {
                         insertOrUpdateFieldInReportMetadata(
                           reportMetadata,
                           'process_initiator_username',
-                          event.selectedItem,
+                          selectedItem,
                         );
-                        setProcessInitiatorSelection(event.selectedItem);
+                        setProcessInitiatorSelection(selectedItem);
                       }}
                       id="process-instance-initiator-search"
                       data-testid="process-instance-initiator-search"
-                      items={processInstanceInitiatorOptions}
-                      placeholder={t('start_typing_username')}
-                      titleText={t('started_by')}
-                      selectedItem={processInitiatorSelection}
+                      options={processInstanceInitiatorOptions}
+                      value={processInitiatorSelection}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label={t('started_by')}
+                          placeholder={t('start_typing_username')}
+                        />
+                      )}
                     />
                   );
                 }
                 return (
-                  <TextInput
+                  <TextField
                     id="process-instance-initiator-search"
                     placeholder={t('enter_username')}
-                    labelText={t('started_by')}
+                    label={t('started_by')}
                     onChange={(event: any) => {
                       insertOrUpdateFieldInReportMetadata(
                         reportMetadata,
@@ -1588,99 +1682,28 @@ export default function ProcessInstanceListTableWithFilters({
                 );
               }}
             </Can>
-          </Column>
-          <Column md={4}>{processStatusSearch()}</Column>
+          </Grid>
+          <Grid size={{ xs: 12, md: 3 }}>{processStatusSearch()}</Grid>
         </Grid>
-        <Grid fullWidth className="with-bottom-margin">
-          <Column md={4}>
-            {dateComponent(
-              t('filter_start_date_from'),
-              'start-from',
-              startFromDate,
-              startFromTime,
-              (val: string) => {
-                setStartFromDate(val);
-              },
-              (val: string) => {
-                setStartFromTime(val);
-              },
-              startFromTimeInvalid,
-              setStartFromTimeInvalid,
-            )}
-          </Column>
-          <Column md={4}>
-            {dateComponent(
-              t('filter_start_date_to'),
-              'start-to',
-              startToDate,
-              startToTime,
-              (val: string) => {
-                setStartToDate(val);
-              },
-              (val: string) => {
-                setStartToTime(val);
-              },
-              startToTimeInvalid,
-              setStartToTimeInvalid,
-            )}
-          </Column>
-          <Column md={4}>
-            {dateComponent(
-              t('filter_end_date_from'),
-              'end-from',
-              endFromDate,
-              endFromTime,
-              (val: string) => {
-                setEndFromDate(val);
-              },
-              (val: string) => {
-                setEndFromTime(val);
-              },
-              endFromTimeInvalid,
-              setEndFromTimeInvalid,
-            )}
-          </Column>
-          <Column md={4}>
-            {dateComponent(
-              t('filter_end_date_to'),
-              'end-to',
-              endToDate,
-              endToTime,
-              (val: string) => {
-                setEndToDate(val);
-              },
-              (val: string) => {
-                setEndToTime(val);
-              },
-              endToTimeInvalid,
-              setEndToTimeInvalid,
-            )}
-          </Column>
-        </Grid>
-        <Grid fullWidth className="with-bottom-margin">
-          <Column sm={4} md={4} lg={8}>
-            <ButtonSet>
-              <MuiButton variant="outlined" onClick={clearFilters}>
-                {t('clear_button')}
-              </MuiButton>
-            </ButtonSet>
-          </Column>
-          <Column sm={3} md={3} lg={4}>
-            <div style={{ display: 'flex', gap: '8px' }}>
+        <Grid container className="with-bottom-margin">
+          <Grid size={{ xs: 12 }}>
+            <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
               {saveAsReportComponent()}
+              <Button variant="outlined" onClick={clearFilters}>
+                {t('clear_button')}
+              </Button>
               {deleteReportComponent()}
-            </div>
-          </Column>
-          <Column sm={1} md={1} lg={1}>
-            <Button
-              kind="ghost"
-              onClick={() => setShowAdvancedOptions(true)}
-              data-testid="advanced-options-filters"
-              className="narrow-button button-link"
-            >
-              {t('advanced')}
-            </Button>
-          </Column>
+              <Button
+                variant="text"
+                onClick={() => setShowAdvancedOptions(true)}
+                data-testid="advanced-options-filters"
+                className="narrow-button button-link"
+                sx={{ ml: 'auto' }}
+              >
+                {t('advanced')}
+              </Button>
+            </Stack>
+          </Grid>
         </Grid>
       </>
     );
@@ -1689,8 +1712,8 @@ export default function ProcessInstanceListTableWithFilters({
   const reportSearchComponent = () => {
     if (showReports) {
       return (
-        <Grid className="with-tiny-bottom-margin" fullWidth>
-          <Column sm={4} md={8} lg={16}>
+        <Grid container className="with-tiny-bottom-margin">
+          <Grid size={{ xs: 12 }}>
             <ProcessInstanceReportSearch
               onChange={processInstanceReportDidChange}
               selectedItem={processInstanceReportSelection}
@@ -1699,17 +1722,40 @@ export default function ProcessInstanceListTableWithFilters({
                 setProcessInstanceReportSelection
               }
             />
-          </Column>
+          </Grid>
         </Grid>
       );
     }
     return null;
   };
 
+  const quickFilterControls = () => {
+    if (!filtersEnabled || !reportMetadata) {
+      return null;
+    }
+    return (
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+        <TimeRangeFilter
+          startTimestamp={filterValue(reportMetadata.filter_by, 'start_from')}
+          endTimestamp={filterValue(reportMetadata.filter_by, 'start_to')}
+          onApply={applyTimeRangeFilter}
+        />
+        <QuickFilterChips
+          activePresetIds={Object.values(activeQuickFilterByField)}
+          reportMetadata={reportMetadata}
+          onApplyPreset={applyQuickFilter}
+        />
+      </Stack>
+    );
+  };
+
   const onProcessInstanceTableListUpdate = useCallback(
     (result: any) => {
-      // mostly for pagination so we do not set the page to 1 if the report did not change
+      // mostly for pagination so we do not set the page to 1 if the report did not change.
+      // reportHash is null on the initial load, and that does not count as a report
+      // change, so a page number specified in the url is honored on page load.
       if (result.report_hash && result.report_hash !== reportHash) {
+        const reportChanged = reportHash !== null;
         setReportHash(result.report_hash);
         const { page } = getPageInfoFromSearchParams(
           searchParams,
@@ -1717,8 +1763,11 @@ export default function ProcessInstanceListTableWithFilters({
           undefined,
           paginationQueryParamPrefix,
         );
-        if (page !== 1) {
-          searchParams.set('page', '1');
+        if (reportChanged && page !== 1) {
+          const pageParamName = paginationQueryParamPrefix
+            ? `${paginationQueryParamPrefix}_page`
+            : 'page';
+          searchParams.set(pageParamName, '1');
           setSearchParams(searchParams);
         }
       }
@@ -1742,8 +1791,8 @@ export default function ProcessInstanceListTableWithFilters({
 
   const filterComponent = () => {
     return (
-      <Grid fullWidth condensed className="megacondensed">
-        <Column sm={{ span: 4 }} md={{ span: 8 }} lg={{ span: 16 }}>
+      <Grid container className="megacondensed">
+        <Grid size={{ xs: 12 }}>
           <Filters
             filterOptions={filterOptions}
             showFilterOptions={showFilterOptions}
@@ -1751,8 +1800,10 @@ export default function ProcessInstanceListTableWithFilters({
             reportSearchComponent={reportSearchComponent}
             filtersEnabled={filtersEnabled}
             reportHash={reportHash}
+            controlsStart={quickFilterControls()}
+            controlsBeforeFilterButton={filtersEnabled ? groupByControl : null}
           />
-        </Column>
+        </Grid>
       </Grid>
     );
   };
@@ -1763,23 +1814,33 @@ export default function ProcessInstanceListTableWithFilters({
     resultsTable = (
       <>
         {refilterTextComponent}
-        <ProcessInstanceListTable
-          autoReload={autoReloadEnabled}
-          canCompleteAllTasks={canCompleteAllTasks}
-          filterComponent={filterComponent}
-          header={header}
-          onProcessInstanceTableListUpdate={onProcessInstanceTableListUpdate}
-          paginationClassName={paginationClassName}
-          paginationQueryParamPrefix={paginationQueryParamPrefix}
-          perPageOptions={perPageOptions}
-          reportMetadata={reportMetadata}
-          showActionsColumn={showActionsColumn}
-          showLinkToReport={showLinkToReport}
-          showRefreshButton
-          tableHtmlId={tableHtmlId}
-          textToShowIfEmpty={textToShowIfEmpty}
-          variant={variant}
-        />
+        {groupBy === 'process_group' ? (
+          <>
+            {filterComponent()}
+            <ProcessInstanceGroupByModel
+              reportMetadata={reportMetadata}
+              variant={variant}
+            />
+          </>
+        ) : (
+          <ProcessInstanceListTable
+            autoReload={autoReloadEnabled}
+            canCompleteAllTasks={canCompleteAllTasks}
+            filterComponent={filterComponent}
+            header={header}
+            onProcessInstanceTableListUpdate={onProcessInstanceTableListUpdate}
+            paginationClassName={paginationClassName}
+            paginationQueryParamPrefix={paginationQueryParamPrefix}
+            perPageOptions={perPageOptions}
+            reportMetadata={reportMetadata}
+            showActionsColumn={showActionsColumn}
+            showLinkToReport={showLinkToReport}
+            showRefreshButton
+            tableHtmlId={tableHtmlId}
+            textToShowIfEmpty={textToShowIfEmpty}
+            variant={variant}
+          />
+        )}
       </>
     );
   }

@@ -3,13 +3,21 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime
+import time
+from collections import deque
 from logging.handlers import SocketHandler
+from threading import Event
+from threading import Thread
 from typing import Any
 from uuid import uuid4
 
 from flask import g
 from flask.app import Flask
+
+SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR = "spiff_log_handler_skip_record"
+EVENT_STREAM_PAUSE_FILE = "/tmp/spiff-event-stream-paused"  # noqa: S108 - container-local operator control marker
+EVENT_STREAM_RETRY_INTERVAL_SECONDS = 1.0
+EVENT_STREAM_SHUTDOWN_DRAIN_SECONDS = 5.0
 
 # flask logging formats:
 #   from: https://www.askpython.com/python-modules/flask/flask-logging
@@ -27,13 +35,34 @@ class InvalidLogLevelError(Exception):
     pass
 
 
+def skip_apscheduler_running_job_record(record: logging.LogRecord) -> bool:
+    return not record.getMessage().startswith("Running job ")
+
+
 class SpiffLogHandler(SocketHandler):
-    def __init__(self, app, *args):  # type: ignore
+    def __init__(self, app: Flask, *args: Any) -> None:
         super().__init__(
             app.config["SPIFFWORKFLOW_BACKEND_EVENT_STREAM_HOST"],
             app.config["SPIFFWORKFLOW_BACKEND_EVENT_STREAM_PORT"],
         )
         self.app = app
+        self.pending_events: deque[bytes] = deque()
+        self.retry_stop = Event()
+        self.retry_wakeup = Event()
+        self.retry_thread: Thread | None = None
+        self.pause_file = EVENT_STREAM_PAUSE_FILE
+        self.retry_interval_seconds = EVENT_STREAM_RETRY_INTERVAL_SECONDS
+        self.shutdown_drain_seconds = EVENT_STREAM_SHUTDOWN_DRAIN_SECONDS
+        self.delivery_failure_count = 0
+        self.next_socket_warning_at = 0.0
+        try:
+            self.socket_warning_interval_seconds = int(
+                os.environ.get("SPIFFWORKFLOW_BACKEND_EVENT_STREAM_WARNING_INTERVAL_SECONDS", "60")
+            )
+        except ValueError:
+            self.socket_warning_interval_seconds = 60
+        if self.socket_warning_interval_seconds < 1:
+            self.socket_warning_interval_seconds = 60
 
     def format(self, record: Any) -> str:
         return json.dumps(
@@ -42,7 +71,7 @@ class SpiffLogHandler(SocketHandler):
                 "type": record.name,
                 "id": str(uuid4()),
                 "source": self.app.config["SPIFFWORKFLOW_BACKEND_EVENT_STREAM_SOURCE"],
-                "timestamp": datetime.utcnow().timestamp(),
+                "timestamp": time.time(),
                 "data": record._spiff_data,
             }
         )
@@ -61,6 +90,9 @@ class SpiffLogHandler(SocketHandler):
             return None, None
 
     def filter(self, record: Any) -> bool:
+        if getattr(record, SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR, False):
+            return False
+
         if (
             record.name == "spiff.task"
             and record.task_type
@@ -119,6 +151,150 @@ class SpiffLogHandler(SocketHandler):
     def makePickle(self, record: Any) -> bytes:  # noqa: N802
         # Instead of returning a pickled log record, write the json entry to the socket
         return (self.format(record) + "\n").encode("utf-8")
+
+    def createSocket(self, record: Any | None = None) -> None:  # noqa: N802
+        now = time.time()
+        if self.retryTime is None:
+            attempt = True
+        else:
+            attempt = now >= self.retryTime
+        if attempt:
+            try:
+                self.sock = self.makeSocket()
+                self.retryTime = None
+            except OSError as exception:
+                if self.retryTime is None:
+                    self.retryPeriod = self.retryStart
+                else:
+                    self.retryPeriod = self.retryPeriod * self.retryFactor
+                    if self.retryPeriod > self.retryMax:
+                        self.retryPeriod = self.retryMax
+                self.retryTime = now + self.retryPeriod
+                self.log_socket_failure(exception, record)
+        elif record is not None:
+            self.log_socket_failure(None, record)
+
+    def send(self, s: bytes, record: Any | None = None) -> bool:  # type: ignore[override]
+        if self.sock is None:
+            self.createSocket(record)
+        if self.sock:
+            try:
+                self.sock.sendall(s)
+                return True
+            except OSError as exception:
+                self.sock.close()
+                self.sock = None
+                self.log_socket_failure(exception, record)
+        return False
+
+    def emit(self, record: Any) -> None:
+        try:
+            s = self.makePickle(record)
+            queue_was_empty = not self.pending_events
+            self.pending_events.append(s)
+            self.flush_pending(max_events=1, record=record if queue_was_empty else None)
+            if self.pending_events:
+                self.start_retry_thread()
+        except Exception:
+            self.handleError(record)
+
+    def delivery_is_paused(self) -> bool:
+        return bool(self.pause_file) and os.path.exists(self.pause_file)
+
+    def flush_pending(self, max_events: int | None = None, record: Any | None = None) -> None:
+        if self.delivery_is_paused():
+            if self.sock is not None:
+                self.sock.close()
+                self.sock = None
+            return
+
+        sent = 0
+        while self.pending_events and (max_events is None or sent < max_events):
+            payload = self.pending_events[0]
+            if not self.send(payload, record):
+                return
+            self.pending_events.popleft()
+            record = None
+            sent += 1
+
+    def start_retry_thread(self) -> None:
+        if self.retry_thread is None or not self.retry_thread.is_alive():
+            self.retry_thread = Thread(
+                target=self.retry_pending_events,
+                daemon=True,
+                name="spiff-event-stream-retry",
+            )
+            self.retry_thread.start()
+        self.retry_wakeup.set()
+
+    def retry_pending_events(self) -> None:
+        while not self.retry_stop.is_set():
+            self.retry_wakeup.wait(self.retry_interval_seconds)
+            self.retry_wakeup.clear()
+            if self.retry_stop.is_set():
+                return
+            self.acquire()
+            try:
+                self.flush_pending()
+            finally:
+                self.release()
+
+    def close(self) -> None:
+        deadline = time.monotonic() + self.shutdown_drain_seconds
+        self.acquire()
+        try:
+            while self.pending_events and not self.delivery_is_paused():
+                # A process shutdown is the last opportunity to hand buffered
+                # events to a healthy listener, so bypass normal reconnect backoff.
+                self.retryTime = None
+                self.flush_pending()
+                if not self.pending_events or time.monotonic() >= deadline:
+                    break
+                time.sleep(min(self.retry_interval_seconds, max(deadline - time.monotonic(), 0)))
+            if self.pending_events:
+                self.app.logger.error(
+                    "Event stream handler closed with buffered events still pending.",
+                    extra={
+                        SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR: True,
+                        "extras": {"pending_event_count": len(self.pending_events)},
+                    },
+                )
+        finally:
+            self.release()
+        self.retry_stop.set()
+        self.retry_wakeup.set()
+        super().close()
+
+    def log_socket_failure(self, exception: OSError | None, record: Any | None) -> None:
+        self.delivery_failure_count += 1
+        now = time.monotonic()
+        if now < self.next_socket_warning_at:
+            return
+
+        delivery_failure_count = self.delivery_failure_count
+        self.delivery_failure_count = 0
+        self.next_socket_warning_at = now + self.socket_warning_interval_seconds
+
+        spiff_data = getattr(record, "_spiff_data", {}) if record is not None else {}
+        self.app.logger.warning(
+            "Event stream socket logging failed; retaining Spiff event records for retry.",
+            extra={
+                SPIFF_LOG_HANDLER_SKIP_RECORD_ATTR: True,
+                "extras": {
+                    "event_stream_host": self.host,
+                    "event_stream_port": self.port,
+                    "delivery_failure_count": delivery_failure_count,
+                    "pending_event_count": len(self.pending_events),
+                    "event_logger_name": getattr(record, "name", None),
+                    "event_message": getattr(record, "msg", None),
+                    "process_instance_id": spiff_data.get("process_instance_id"),
+                    "process_model_identifier": spiff_data.get("process_model_identifier"),
+                    "task_id": spiff_data.get("task_id"),
+                    "task_spec": spiff_data.get("task_spec"),
+                    "socket_error": str(exception) if exception is not None else "retry backoff active",
+                },
+            },
+        )
 
 
 # originally from https://stackoverflow.com/a/70223539/6090676
@@ -254,16 +430,16 @@ def setup_logger_for_app(app: Flask, primary_logger: Any, force_run_with_celery:
                 logger_for_name.propagate = False
                 logger_for_name.addHandler(spiff_logger_filehandler)
             else:
+                exclude_logger_name_from_logging = False
+                for logger_to_exclude in obscure_loggers_to_exclude_from_main_logging:
+                    if name.startswith(logger_to_exclude):
+                        exclude_logger_name_from_logging = True
+
+                # Obscure loggers stay quiet unless explicitly enabled.
+                if exclude_logger_name_from_logging:
+                    log_level_to_use = "ERROR"
+
                 if len(logger_for_name.handlers) < 1:
-                    exclude_logger_name_from_logging = False
-                    for logger_to_exclude in obscure_loggers_to_exclude_from_main_logging:
-                        if name.startswith(logger_to_exclude):
-                            exclude_logger_name_from_logging = True
-
-                    # it's very verbose so set all obscure loggers to ERROR if not in DEBUG
-                    if exclude_logger_name_from_logging or upper_log_level_string != "DEBUG":
-                        log_level_to_use = "ERROR"
-
                     # only need to set the log level here if it is not already excluded from main logging
                     if not exclude_logger_name_from_logging and upper_log_level_string == "DEBUG":
                         exclude_logger_name_from_debug = False
@@ -287,8 +463,19 @@ def setup_logger_for_app(app: Flask, primary_logger: Any, force_run_with_celery:
         spiff_logger = logging.getLogger("spiff")
         spiff_logger.setLevel(logging.INFO)
         spiff_logger.propagate = False
-        handler = SpiffLogHandler(app)  # type: ignore
+        handler = SpiffLogHandler(app)
         spiff_logger.addHandler(handler)
+    else:
+        # local development: quiet the noisy SpiffWorkflow task/workflow loggers
+        # since there is no event stream handler to consume them
+        for noisy_logger in ("spiff.task", "spiff.workflow", "spiff.data"):
+            logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+    # APScheduler owns these repetitive lifecycle lines. Keep warnings/errors and one successful-run heartbeat.
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.INFO)
+    apscheduler_executor_logger = logging.getLogger("apscheduler.executors.default")
+    apscheduler_executor_logger.setLevel(logging.INFO)
+    apscheduler_executor_logger.addFilter(skip_apscheduler_running_job_record)
 
 
 def get_log_formatter(app: Flask) -> logging.Formatter:
@@ -311,6 +498,20 @@ def get_log_formatter(app: Flask) -> logging.Formatter:
         )
         log_formatter = json_formatter
     return log_formatter
+
+
+def configure_celery_stdout_logger(
+    logger: logging.Logger,
+    log_formatter: logging.Formatter,
+    log_level: int,
+) -> None:
+    """Send worker logs directly to stdout instead of Celery's redirected streams."""
+    stdout_handler = logging.StreamHandler(sys.__stdout__ or sys.stdout)
+    stdout_handler.setFormatter(log_formatter)
+    stdout_handler.setLevel(log_level)
+    logger.handlers = [stdout_handler]
+    logger.setLevel(log_level)
+    logger.propagate = False
 
 
 class LoggingService:

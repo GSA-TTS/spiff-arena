@@ -1,4 +1,7 @@
 import time
+from typing import Any
+from typing import Protocol
+from typing import cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -7,6 +10,9 @@ from flask import Flask
 from flask import g
 from starlette.testclient import TestClient
 
+from spiffworkflow_backend.background_processing.celery_tasks.process_instance_task import (
+    celery_task_process_instance_start_from_message,
+)
 from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.helpers.spiff_enum import ProcessInstanceExecutionMode
 from spiffworkflow_backend.models.db import db
@@ -19,12 +25,22 @@ from spiffworkflow_backend.models.process_instance import ProcessInstanceStatus
 from spiffworkflow_backend.models.process_instance_queue import ProcessInstanceQueueModel
 from spiffworkflow_backend.services.message_instrumentation_service import MessageSendInstrumentation
 from spiffworkflow_backend.services.message_service import MessageService
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_queue_service import ProcessInstanceQueueService
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
 from spiffworkflow_backend.services.spec_file_service import SpecFileService
 from spiffworkflow_backend.services.workflow_execution_service import WorkflowExecutionServiceError
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
 from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
+
+
+class SupportsCeleryStartFromMessageTaskRun(Protocol):
+    def run(
+        self,
+        process_instance_id: int,
+        message_instance_id: int,
+        message_triggerable_process_model_id: int,
+    ) -> dict[str, Any]: ...
 
 
 class TestMessageService(BaseTest):
@@ -107,7 +123,7 @@ class TestMessageService(BaseTest):
             message_instance: MessageInstanceModel,
             execution_mode: str | None = None,
             receiving_process_instance_id: int | None = None,
-            processor_receive: ProcessInstanceProcessor | None = None,
+            runtime_receive: ProcessInstanceRuntime | None = None,
             claim_message_instance: bool = True,
             instrumentation: MessageSendInstrumentation | None = None,
         ) -> MessageInstanceModel | None:
@@ -128,7 +144,7 @@ class TestMessageService(BaseTest):
                 message_instance,
                 execution_mode=execution_mode,
                 receiving_process_instance_id=receiving_process_instance_id,
-                processor_receive=processor_receive,
+                runtime_receive=runtime_receive,
                 claim_message_instance=claim_message_instance,
                 instrumentation=instrumentation,
             )
@@ -142,6 +158,76 @@ class TestMessageService(BaseTest):
 
         assert receiver_message.status == MessageStatuses.completed.value
         assert observed_statuses == [(MessageStatuses.running.value, 0, False)]
+
+    def test_asynchronous_message_start_reserves_process_before_initializing_runtime(
+        self,
+        app: Flask,
+        with_db_and_bpmn_file_cleanup: None,
+    ) -> None:
+        load_test_spec(
+            "test_group/simple-message-receive",
+            process_model_source_directory="simple-message-send-receive",
+            bpmn_file_name="message_start_event.bpmn",
+        )
+        g.user = self.find_or_create_user()
+
+        with (
+            self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_CELERY_ENABLED", True),
+            patch("spiffworkflow_backend.services.message_service.queue_message_start_process_instance") as queue_message_start,
+        ):
+            send_message = MessageService.run_process_model_from_message(
+                "message_one",
+                {"payload": "hello"},
+                ProcessInstanceExecutionMode.asynchronous.value,
+            )
+
+        process_instance = ProcessInstanceModel.query.filter_by(id=send_message.process_instance_id).first()
+        assert process_instance is not None
+        assert process_instance.status == ProcessInstanceStatus.not_started.value
+        assert process_instance.bpmn_process_definition_id is None
+        assert process_instance.bpmn_process_id is None
+        assert process_instance.process_instance_queue[0].status == ProcessInstanceQueueService.MESSAGE_START_PENDING_STATUS
+        assert process_instance.id not in ProcessInstanceQueueService.peek_many(
+            ProcessInstanceStatus.not_started.value,
+            round(time.time()),
+        )
+        assert send_message.status == MessageStatuses.running.value
+        assert MessageInstanceModel.query.filter_by(message_type=MessageTypes.receive.value).count() == 0
+
+        message_trigger = MessageTriggerableProcessModel.query.filter_by(message_name="message_one").one()
+        queue_message_start.assert_called_once_with(
+            process_instance.id,
+            send_message.id,
+            message_trigger.id,
+        )
+
+        with (
+            self.app_config_mock(app, "SPIFFWORKFLOW_BACKEND_CELERY_ENABLED", True),
+            patch(
+                "spiffworkflow_backend.services.message_service.queue_process_instance_if_appropriate"
+            ) as queue_process_instance,
+        ):
+            worker_result = cast(
+                SupportsCeleryStartFromMessageTaskRun,
+                celery_task_process_instance_start_from_message,
+            ).run(
+                process_instance.id,
+                send_message.id,
+                message_trigger.id,
+            )
+
+        db.session.expire_all()
+        started_process_instance = ProcessInstanceModel.query.filter_by(id=process_instance.id).one()
+        receiver_message = MessageInstanceModel.query.filter_by(id=worker_result["receiver_message_instance_id"]).one()
+        db.session.refresh(send_message)
+        assert worker_result["process_instance_id"] == started_process_instance.id
+        assert started_process_instance.status == ProcessInstanceStatus.complete.value
+        assert started_process_instance.bpmn_process_definition_id is not None
+        assert started_process_instance.bpmn_process_id is not None
+        assert send_message.status == MessageStatuses.completed.value
+        assert receiver_message.status == MessageStatuses.completed.value
+        assert receiver_message.process_instance_id == started_process_instance.id
+        queue_process_instance.assert_not_called()
 
     def test_run_process_model_from_message_keeps_not_accepted_send_for_debugging(
         self,
@@ -219,8 +305,8 @@ class TestMessageService(BaseTest):
         )
 
         process_instance = self.create_process_instance_from_process_model(process_model)
-        processor_send_receive = ProcessInstanceProcessor(process_instance)
-        processor_send_receive.do_engine_steps(save=True)
+        runtime_send_receive = ProcessInstanceRuntime(process_instance)
+        runtime_send_receive.do_engine_steps(save=True)
 
         # This is typically called in a background cron process, so we will manually call it
         # here in the tests
@@ -251,8 +337,8 @@ class TestMessageService(BaseTest):
         )
 
         process_instance = self.create_process_instance_from_process_model(process_model)
-        processor_send_receive = ProcessInstanceProcessor(process_instance)
-        processor_send_receive.do_engine_steps(save=True)
+        runtime_send_receive = ProcessInstanceRuntime(process_instance)
+        runtime_send_receive.do_engine_steps(save=True)
 
         # This is typically called in a background cron process, so we will manually call it
         MessageService.correlate_all_message_instances()
@@ -276,8 +362,8 @@ class TestMessageService(BaseTest):
         )
         user = self.find_or_create_user("initiator_user")
         process_instance = self.create_process_instance_from_process_model(process_model, user=user)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True)
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True)
 
         # This is typically called in a background cron process, so we will manually call it
         MessageService.correlate_all_message_instances()
@@ -290,9 +376,9 @@ class TestMessageService(BaseTest):
         # Complete the manual task, which means the message should no longer be waiting.
         assert len(process_instance.active_human_tasks) == 1
         human_task_one = process_instance.active_human_tasks[0]
-        spiff_manual_task = processor.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
+        spiff_manual_task = runtime.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
         assert len(process_instance.active_human_tasks) == 1, "expected 1 active human task"
-        ProcessInstanceService.complete_form_task(processor, spiff_manual_task, {}, user, human_task_one)
+        ProcessInstanceService.complete_form_task(runtime, spiff_manual_task, {}, user, human_task_one)
 
         # Assure that we no longer have a message waiting.
         message_instances = MessageInstanceModel.query.filter_by(message_type="receive", status="ready").all()
@@ -442,9 +528,9 @@ class TestMessageService(BaseTest):
             process_model_sender.id, user
         )
 
-        processor_sender = ProcessInstanceProcessor(process_instance_sender)
-        processor_sender.do_engine_steps()
-        processor_sender.save()
+        runtime_sender = ProcessInstanceRuntime(process_instance_sender)
+        runtime_sender.do_engine_steps()
+        runtime_sender.save()
 
         # At this point, the message_sender process has fired two different messages but those
         # processes have not started, and it is now paused, waiting for to receive a message. so
@@ -556,11 +642,11 @@ class TestMessageService(BaseTest):
         message_triggerable_process_model = MessageTriggerableProcessModel.query.filter_by(message_name="message_one").first()
         assert message_triggerable_process_model is not None
 
-        processor = ProcessInstanceService.create_and_run_process_instance(
+        runtime = ProcessInstanceService.create_and_run_process_instance(
             process_model=process_model_sender,
             persistence_level="none",
         )
-        assert processor.process_instance_model.process_model_identifier == "test_group/simple-message-send"
+        assert runtime.process_instance_model.process_model_identifier == "test_group/simple-message-send"
 
         # ensure we commit the message instances
         db.session.commit()
@@ -646,8 +732,8 @@ class TestMessageService(BaseTest):
             process_model_sender.id, user
         )
 
-        processor_sender = ProcessInstanceProcessor(process_instance)
-        processor_sender.do_engine_steps(save=True)
+        runtime_sender = ProcessInstanceRuntime(process_instance)
+        runtime_sender.do_engine_steps(save=True)
 
         # At this point, the message_sender process has fired two different messages but those
         # processes have not started, and it is now paused, waiting for to receive a message. so

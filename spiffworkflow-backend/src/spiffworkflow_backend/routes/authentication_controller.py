@@ -1,6 +1,8 @@
 import ast
 import base64
+import ipaddress
 import re
+from urllib.parse import urlparse
 
 import flask
 from flask import current_app
@@ -18,7 +20,6 @@ from spiffworkflow_backend.exceptions.error import TokenExpiredError
 from spiffworkflow_backend.models.group import SPIFF_NO_AUTH_GROUP
 from spiffworkflow_backend.models.group import GroupModel
 from spiffworkflow_backend.models.service_account import ServiceAccountModel
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
 from spiffworkflow_backend.models.user import SPIFF_NO_AUTH_USER
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.services.authentication_service import AuthenticationService
@@ -92,7 +93,7 @@ def verify_token(token: str | None = None, force_run: bool | None = False) -> di
         # I am pretty sure g.token is only actually used in UserService.has_user to
         # figure out if the if the user has logged in.
         if token_info["token"]:
-            # This is an id token, so we don't have a refresh token yet
+            # API clients authenticate with an access token or an Arena-generated token.
             g.token = token_info["token"]
             g.authenticated = True
             # we are getting the scope so it will decode the token and ensure it's valid.
@@ -111,16 +112,12 @@ def login(
     process_instance_id: int | None = None,
     task_guid: str | None = None,
 ) -> Response:
-    frontend_url = str(current_app.config.get("SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND"))
+    frontend_url = str(current_app.config.get("SPIFFWORKFLOW_BACKEND_FRONTEND_URL"))
 
     # strip either :80 and :443 off the end of the frontend url string
     frontend_url = re.sub(r":(80|443)$", "", frontend_url)
 
-    # strip trailing slash off redirect_url, since we want
-    # redirect url http://localhost/ to be valid if the frontend url is http://localhost frontend, etc
-    redirect_url_for_check = redirect_url.rstrip("/")
-
-    if not redirect_url_for_check.startswith(frontend_url):
+    if not _redirect_url_is_allowed_for_frontend(redirect_url, frontend_url):
         raise InvalidRedirectUrlError(
             f"Invalid redirect url was given: '{redirect_url}'. It must start with the frontend url: '{frontend_url}'"
         )
@@ -139,6 +136,58 @@ def login(
         authentication_identifier=authentication_identifier, final_url=redirect_url
     )
     return redirect(login_redirect_url)
+
+
+def _redirect_url_is_allowed_for_frontend(redirect_url: str, frontend_url: str) -> bool:
+    # strip trailing slash off redirect_url, since we want
+    # redirect url http://localhost/ to be valid if the frontend url is http://localhost frontend, etc
+    redirect_url_for_check = redirect_url.rstrip("/")
+    frontend_url_for_check = frontend_url.rstrip("/")
+
+    if redirect_url_for_check == frontend_url_for_check or redirect_url_for_check.startswith(f"{frontend_url_for_check}/"):
+        return True
+
+    frontend_url_parsed = urlparse(frontend_url)
+    redirect_url_parsed = urlparse(redirect_url)
+    try:
+        frontend_port = frontend_url_parsed.port
+        redirect_port = redirect_url_parsed.port
+    except ValueError:
+        return False
+
+    return bool(
+        _hosts_are_allowed_local_development_redirect_aliases(
+            frontend_url_parsed.hostname,
+            redirect_url_parsed.hostname,
+        )
+        and frontend_url_parsed.scheme == redirect_url_parsed.scheme
+        and frontend_port == redirect_port
+    )
+
+
+def _hosts_are_allowed_local_development_redirect_aliases(
+    frontend_hostname: str | None,
+    redirect_hostname: str | None,
+) -> bool:
+    if frontend_hostname is None or redirect_hostname is None:
+        return False
+
+    configured_hosts = str(current_app.config.get("SPIFFWORKFLOW_BACKEND_ALLOWED_REDIRECT_HOST_ALIASES", ""))
+    allowed_hosts = {host.strip().lower() for host in configured_hosts.split(",") if host.strip()}
+    return frontend_hostname.lower() in allowed_hosts and redirect_hostname.lower() in allowed_hosts
+
+
+def _requires_host_only_cookie_domain(hostname: str | None) -> bool:
+    if hostname is None:
+        return False
+    if hostname == "localhost" or "." not in hostname:
+        return True
+
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        return False
 
 
 def login_return(
@@ -164,21 +213,24 @@ def login_return(
     auth_token_object = AuthenticationService().get_auth_token_object(
         code, authentication_identifier=authentication_identifier, pkce_id=pkce_id
     )
-    if "id_token" in auth_token_object:
+    if "id_token" in auth_token_object and "access_token" in auth_token_object:
         id_token = auth_token_object["id_token"]
+        access_token = auth_token_object["access_token"]
         decoded_token = _get_decoded_token(id_token)
 
-        if AuthenticationService.validate_decoded_token(decoded_token, authentication_identifier=authentication_identifier):
+        if AuthenticationService.validate_decoded_id_token(decoded_token, authentication_identifier=authentication_identifier):
             if decoded_token and "error" not in decoded_token:
                 user_model = AuthorizationService.create_user_from_sign_in(decoded_token)
                 g.user = user_model
-                g.token = auth_token_object["id_token"]
+                g.token = access_token
                 if "refresh_token" in auth_token_object:
                     AuthenticationService.store_refresh_token(user_model.id, auth_token_object["refresh_token"])
                 redirect_url = state_redirect_url
                 tld = current_app.config["THREAD_LOCAL_DATA"]
-                tld.new_access_token = auth_token_object["id_token"]
-                tld.new_id_token = auth_token_object["id_token"]
+                # The SPA sends the OAuth access token as its API bearer credential.
+                # The OIDC ID token identifies the login and is retained separately for logout.
+                tld.new_access_token = access_token
+                tld.new_id_token = id_token
                 tld.new_authentication_identifier = authentication_identifier
                 if current_app.config.get("SPIFFWORKFLOW_BACKEND_LOG_LOGIN_LOGOUT"):
                     current_app.logger.info(f"User successfully logged in: {g.user.username}")
@@ -195,7 +247,7 @@ def login_return(
         # we normally clear cookies on 401, but there is a high chance you do not have any yet in this case
         raise ApiError(
             error_code="missing_token",
-            message="Login failed. Please try again",
+            message="Login failed because the identity provider did not return both an access token and an ID token.",
             status_code=401,
         )
 
@@ -217,7 +269,7 @@ def login_with_access_token(authentication_identifier: str) -> Response:
 
     decoded_token = _get_decoded_token(access_token)
 
-    if AuthenticationService.validate_decoded_token(decoded_token, authentication_identifier=authentication_identifier):
+    if AuthenticationService.validate_decoded_access_token(decoded_token, authentication_identifier=authentication_identifier):
         if decoded_token and "error" not in decoded_token:
             AuthorizationService.create_user_from_sign_in(decoded_token)
     else:
@@ -253,7 +305,7 @@ def logout(id_token: str, authentication_identifier: str, redirect_url: str | No
 
 
 def logout_return() -> Response:
-    frontend_url = str(current_app.config["SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND"])
+    frontend_url = str(current_app.config["SPIFFWORKFLOW_BACKEND_FRONTEND_URL"])
     return redirect(f"{frontend_url}/")
 
 
@@ -274,19 +326,16 @@ def _set_new_access_token_in_cookie(
     It will also delete the cookies if the user has logged out.
     """
     tld = current_app.config["THREAD_LOCAL_DATA"]
-    domain_for_frontend_cookie: str | None = re.sub(
-        r"^https?:\/\/",
-        "",
-        current_app.config["SPIFFWORKFLOW_BACKEND_URL_FOR_FRONTEND"],
-    )
-    if domain_for_frontend_cookie and domain_for_frontend_cookie.startswith("localhost"):
+    frontend_url = current_app.config["SPIFFWORKFLOW_BACKEND_FRONTEND_URL"]
+    domain_for_frontend_cookie = urlparse(frontend_url).hostname
+    if _requires_host_only_cookie_domain(domain_for_frontend_cookie):
         domain_for_frontend_cookie = None
 
-    # fixme - we should not be passing the access token back to the client
+    # The SPA reads this cookie and sends the access token in its Authorization header.
     if hasattr(tld, "new_access_token") and tld.new_access_token:
         response.set_cookie("access_token", tld.new_access_token, domain=domain_for_frontend_cookie)
 
-    # id_token is required for logging out since this gets passed back to the openid server
+    # The ID token supplies identity claims to the SPA and is required for OIDC logout.
     if hasattr(tld, "new_id_token") and tld.new_id_token:
         response.set_cookie("id_token", tld.new_id_token, domain=domain_for_frontend_cookie)
 
@@ -357,7 +406,7 @@ def _get_user_model_from_token(decoded_token: dict) -> UserModel | None:
                 user_info = None
                 authentication_identifier = _get_authentication_identifier_from_request()
                 try:
-                    if AuthenticationService.validate_decoded_token(
+                    if AuthenticationService.validate_decoded_access_token(
                         decoded_token, authentication_identifier=authentication_identifier
                     ):
                         user_info = decoded_token
@@ -374,10 +423,11 @@ def _get_user_model_from_token(decoded_token: dict) -> UserModel | None:
                             auth_token: dict = AuthenticationService.get_auth_token_from_refresh_token(
                                 refresh_token, authentication_identifier=authentication_identifier
                             )
-                            if auth_token and "error" not in auth_token and "id_token" in auth_token:
+                            if auth_token and "error" not in auth_token and "access_token" in auth_token:
                                 tld = current_app.config["THREAD_LOCAL_DATA"]
-                                tld.new_access_token = auth_token["id_token"]
-                                tld.new_id_token = auth_token["id_token"]
+                                tld.new_access_token = auth_token["access_token"]
+                                if "id_token" in auth_token:
+                                    tld.new_id_token = auth_token["id_token"]
                                 # We have the user, but this code is a bit convoluted, and will later demand
                                 # a user_info object so it can look up the user.  Sorry to leave this crap here.
                                 user_info = {

@@ -11,7 +11,7 @@ from spiffworkflow_backend.models.db import db
 from spiffworkflow_backend.models.process_instance_event import ProcessInstanceEventModel
 from spiffworkflow_backend.models.process_instance_event import ProcessInstanceEventType
 from spiffworkflow_backend.models.process_instance_migration_detail import ProcessInstanceMigrationDetailModel
-from spiffworkflow_backend.models.task import TaskModel  # noqa: F401
+from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.models.task_definition import TaskDefinitionModel
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.routes.process_api_blueprint import _find_process_instance_by_id_or_raise
@@ -143,23 +143,19 @@ def error_detail_show(
 ) -> flask.wrappers.Response:
     process_instance_event = ProcessInstanceEventModel.query.filter_by(id=process_instance_event_id).first()
     if process_instance_event is None:
-        raise (
-            ApiError(
-                error_code="process_instance_event_cannot_be_found",
-                message=f"Process instance event cannot be found: {process_instance_event_id}",
-                status_code=400,
-            )
+        raise ApiError(
+            error_code="process_instance_event_cannot_be_found",
+            message=f"Process instance event cannot be found: {process_instance_event_id}",
+            status_code=400,
         )
     if len(process_instance_event.error_details) < 1:
-        raise (
-            ApiError(
-                error_code="process_instance_event_error_details_not_found",
-                message=(
-                    f"Error details for process instance event could not be found: {process_instance_event_id}. "
-                    "Perhaps no exception was available."
-                ),
-                status_code=400,
-            )
+        raise ApiError(
+            error_code="process_instance_event_error_details_not_found",
+            message=(
+                f"Error details for process instance event could not be found: {process_instance_event_id}. "
+                "Perhaps no exception was available."
+            ),
+            status_code=400,
         )
 
     error_details = process_instance_event.error_details[0]

@@ -39,15 +39,22 @@ def spiff_json_object_hook(dct):
 
 from spiff_arena_common.data_stores import JSONFileDataStore  # noqa: E402
 
+from SpiffWorkflow.bpmn import BpmnEvent  # noqa: E402
 from SpiffWorkflow.bpmn.exceptions import WorkflowTaskException  # noqa: E402
 from SpiffWorkflow.bpmn.serializer import DefaultRegistry  # noqa: E402
+from SpiffWorkflow.bpmn.specs.event_definitions.timer import TimerEventDefinition  # noqa: E402
 from SpiffWorkflow.bpmn.specs.mixins.multiinstance_task import LoopTask  # noqa: E402
 from SpiffWorkflow.bpmn.parser.util import full_tag  # noqa: E402
 from SpiffWorkflow.bpmn.script_engine import PythonScriptEngine, TaskDataEnvironment  # noqa: E402
 from SpiffWorkflow.bpmn.serializer.workflow import BpmnWorkflowSerializer  # noqa: E402
 from SpiffWorkflow.bpmn.workflow import BpmnWorkflow  # noqa: E402
 from SpiffWorkflow.spiff.parser.process import SpiffBpmnParser  # noqa: E402
-from SpiffWorkflow.spiff.parser.event_parsers import SpiffReceiveTaskParser, SpiffSendTaskParser  # noqa: E402
+from SpiffWorkflow.spiff.parser.event_parsers import SpiffReceiveTaskParser, SpiffSendTaskParser, SpiffStartEventParser  # noqa: E402
+from SpiffWorkflow.bpmn.specs.defaults import StartEvent  # noqa: E402
+from SpiffWorkflow.bpmn.specs.event_definitions.message import MessageEventDefinition as BpmnMessageEventDefinition  # noqa: E402
+from SpiffWorkflow.bpmn.serializer.default.task_spec import EventConverter  # noqa: E402
+from SpiffWorkflow.spiff.specs.event_definitions import ErrorEventDefinition  # noqa: E402
+
 from SpiffWorkflow.spiff.parser.task_spec import ServiceTaskParser, SpiffTaskParser  # noqa: E402
 from SpiffWorkflow.spiff.serializer.config import SPIFF_CONFIG  # noqa: E402
 from SpiffWorkflow.spiff.serializer.task_spec import SendReceiveTaskConverter, ServiceTaskConverter, SpiffBpmnTaskConverter  # noqa: E402
@@ -57,6 +64,18 @@ from SpiffWorkflow.util.task import TaskFilter, TaskState  # noqa: E402
 logging.basicConfig(level=logging.ERROR)
 
 _INTERNAL_KEYS = {"__builtins__", "__annotations__"}
+_EXTERNAL_CONTEXT_KEY = "spiff__external_context"
+_DEFAULT_PROCESS_INITIATOR_USER = {
+    "id": 1,
+    "username": "initiator_user",
+    "email": "initiator_user@example.com",
+    "display_name": "Mr. Process Initiator User",
+    "tenant_specific_field_1": "initiator_tenant_specific_field_1",
+    "tenant_specific_field_2": "initiator_tenant_specific_field_2",
+    "tenant_specific_field_3": "initiator_tenant_specific_field_3",
+    "updated_at_in_seconds": 0,
+    "created_at_in_seconds": 0,
+}
 
 class CustomManualTask(ManualTask):
     def _run(self, task):
@@ -78,8 +97,87 @@ class CustomNoneTaskConverter(SpiffBpmnTaskConverter):
 
 class CustomServiceTask(ServiceTask):
     def _execute(self, task):
-        super()._execute(task)
+        result = task.workflow.script_engine.call_service(
+            task,
+            operation_name=self.operation_name,
+            operation_params=self.evaluate_params(task),
+        )
+        parsed_result = json.loads(result)
+        if self._handle_connector_error(task, parsed_result):
+            return True
+
+        task.data[self.result_variable] = parsed_result
         return None
+
+    def handle_completed_result(self, task):
+        parsed_result = task.data.get(self.result_variable)
+        return self._handle_connector_error(task, parsed_result)
+
+    def _handle_connector_error(self, task, parsed_result):
+        self._add_http_status_error(parsed_result)
+
+        if not self._is_connector_error(parsed_result):
+            return False
+
+        if self._catch_connector_error(task, parsed_result):
+            return True
+
+        error = parsed_result["error"]
+        message = error.get("message") or f"Service task returned error code {error['error_code']}"
+        raise WorkflowTaskException(
+            "Error executing Service Task",
+            task=task,
+            exception=Exception(message),
+        )
+
+    def _add_http_status_error(self, parsed_result):
+        if not isinstance(parsed_result, dict) or parsed_result.get("error") is not None:
+            return
+
+        if parsed_result.get("command_response_version", 0) <= 1:
+            return
+
+        command_response = parsed_result.get("command_response")
+        if not isinstance(command_response, dict):
+            return
+
+        http_status = command_response.get("http_status")
+        if not isinstance(http_status, int) or http_status < 300:
+            return
+
+        parsed_result["error"] = {
+            "error_code": f"ServiceTaskHttpError{http_status}",
+            "message": f"Service task received HTTP {http_status} from upstream service.",
+        }
+
+    def _is_connector_error(self, parsed_result):
+        error = parsed_result.get("error") if isinstance(parsed_result, dict) else None
+        return isinstance(error, dict) and bool(error.get("error_code"))
+
+    def _catch_connector_error(self, task, parsed_result):
+        error = parsed_result["error"]
+        payload = {
+            "error_code": error["error_code"],
+            "message": error.get("message", ""),
+            "command_response_body": parsed_result,
+            "operator_identifier": self.operation_name,
+        }
+        event_definition = ErrorEventDefinition(name=error["error_code"], code=error["error_code"])
+        bpmn_event = BpmnEvent(event_definition, payload=payload, target=task.workflow)
+        catching_tasks = task.workflow.get_tasks(
+            catches_event=bpmn_event,
+            state=TaskState.NOT_FINISHED_MASK,
+        )
+        if not catching_tasks:
+            catching_tasks = task.workflow.top_workflow.get_tasks(
+                catches_event=bpmn_event,
+                state=TaskState.NOT_FINISHED_MASK,
+            )
+        if not catching_tasks:
+            return False
+
+        task.workflow.top_workflow.catch(bpmn_event)
+        return True
 
 class CustomServiceTaskConverter(ServiceTaskConverter):
     def __init__(self, target_class, registry, typename = "ServiceTask"):
@@ -114,6 +212,22 @@ class CustomSendTaskConverter(SendReceiveTaskConverter):
     def __init__(self, target_class, registry, typename = "SendTask"):
         super().__init__(target_class, registry, typename)
 
+class CustomStartEvent(StartEvent):
+    def _update_hook(self, my_task):
+        if isinstance(self.event_definition, BpmnMessageEventDefinition):
+            my_task._inherit_data()
+            return True  # bypass message-waiting; go straight to READY for user input
+        return super()._update_hook(my_task)
+
+    def _run(self, my_task):
+        if isinstance(self.event_definition, BpmnMessageEventDefinition):
+            return None  # pause in STARTED state; user will provide the message payload
+        return super()._run(my_task)
+
+class CustomStartEventConverter(EventConverter):
+    def __init__(self, target_class, registry, typename="StartEvent"):
+        super().__init__(target_class, registry, typename)
+
 class CustomParser(SpiffBpmnParser):
     DATA_STORE_CLASSES = {
         "JSONFileDataStore": JSONFileDataStore,
@@ -126,6 +240,7 @@ class CustomParser(SpiffBpmnParser):
     OVERRIDE_PARSER_CLASSES.update({full_tag("userTask"): (SpiffTaskParser, CustomUserTask)})
     OVERRIDE_PARSER_CLASSES.update({full_tag("receiveTask"): (SpiffReceiveTaskParser, CustomReceiveTask)})
     OVERRIDE_PARSER_CLASSES.update({full_tag("sendTask"): (SpiffSendTaskParser, CustomSendTask)})
+    OVERRIDE_PARSER_CLASSES.update({full_tag("startEvent"): (SpiffStartEventParser, CustomStartEvent)})
 
 
 SPIFF_CONFIG[CustomManualTask] = CustomManualTaskConverter
@@ -134,6 +249,7 @@ SPIFF_CONFIG[CustomServiceTask] = CustomServiceTaskConverter
 SPIFF_CONFIG[CustomUserTask] = CustomUserTaskConverter
 SPIFF_CONFIG[CustomReceiveTask] = CustomReceiveTaskConverter
 SPIFF_CONFIG[CustomSendTask] = CustomSendTaskConverter
+SPIFF_CONFIG[CustomStartEvent] = CustomStartEventConverter
 
 del SPIFF_CONFIG[ManualTask]
 del SPIFF_CONFIG[NoneTask]
@@ -141,6 +257,7 @@ del SPIFF_CONFIG[ServiceTask]
 del SPIFF_CONFIG[UserTask]
 del SPIFF_CONFIG[ReceiveTask]
 del SPIFF_CONFIG[SendTask]
+del SPIFF_CONFIG[StartEvent]
 
 class CustomEnvironment(TaskDataEnvironment):
     def __init__(self):
@@ -154,18 +271,35 @@ class CustomEnvironment(TaskDataEnvironment):
             "timedelta": datetime.timedelta,
         })
 
-    def execute(self, script, context, external_context=None):
+    def _build_external_context(self, context, external_context=None):
         if external_context is None:
             external_context = {}
 
+        configured_external_context = context.pop(_EXTERNAL_CONTEXT_KEY, {})
+        process_initiator_user = configured_external_context.get(
+            "get_process_initiator_user",
+            _DEFAULT_PROCESS_INITIATOR_USER,
+        )
+
         external_context["get_task_data_value"] = lambda k, d=None: context.get(k, d)
-        external_context["get_top_level_process_info"] = lambda: {
+        external_context["get_toplevel_process_info"] = lambda: {
             "process_instance_id": 0,
             "process_model_identifier": "local",
+        }
+        external_context["get_frontend_url"] = lambda: "http://local.spiff"
+        external_context["get_url_for_task"] = lambda task_guid, public=False: (
+            f"http://local.spiff{'/public' if public is True else ''}/tasks/0/{task_guid}"
+        )
+        external_context["get_task_potential_owners"] = lambda task_guid: {
+            "users": ["task_owner_1@example.com", "task_owner_2@example.com"],
+            "groups": ["task_owners"],
         }
         external_context["get_current_user"] = lambda: {
             "email": "current_user@example.com",
             "display_name": "Mr. Current User",
+        }
+        external_context["get_process_initiator_user"] = lambda: {
+            key: value for key, value in process_initiator_user.items()
         }
         external_context["get_group_members"] = lambda group_name: [
             "group_member_1@example.com",
@@ -178,16 +312,33 @@ class CustomEnvironment(TaskDataEnvironment):
             for k, v in DefaultRegistry().convert(context).items()
             if k not in hidden_keys and not callable(v) and not isinstance(v, ModuleType)
         }
+        return external_context
 
+    def evaluate(self, expression, context, external_context=None):
+        external_context = self._build_external_context(context, external_context)
+        return super().evaluate(expression, context, external_context)
+
+    def execute(self, script, context, external_context=None):
+        external_context = self._build_external_context(context, external_context)
         return super().execute(script or "", context, external_context)
 
 
-custom_environment = CustomEnvironment()
-
-
 class CustomScriptEngine(PythonScriptEngine):
-    def __init__(self):
-        super().__init__(environment=custom_environment)
+    def __init__(self, external_context=None):
+        super().__init__(environment=CustomEnvironment())
+        self.external_context = external_context or {}
+
+    def _apply_external_context(self, task):
+        if self.external_context:
+            task.data[_EXTERNAL_CONTEXT_KEY] = self.external_context
+
+    def evaluate(self, task, expression, external_context=None):
+        self._apply_external_context(task)
+        return super().evaluate(task, expression, external_context)
+
+    def execute(self, task, script, external_context=None):
+        self._apply_external_context(task)
+        return super().execute(task, script, external_context)
 
     def call_service(
         self,
@@ -380,22 +531,138 @@ def print_progress(iteration):
         "iteration": iteration,
     }, sort_keys=True), flush=True)
 
+
+def _unittest_fixture_cursor(workflow, task, cache):
+    workflow_data = getattr(workflow, "data", {})
+    fixture_file = task.data.get("spiff_testFixture_file")
+    if fixture_file:
+        if cache.get("file") != fixture_file or cache.get("recording") is None:
+            try:
+                with open(fixture_file) as f:
+                    cache["recording"] = json.load(f)
+                cache["file"] = fixture_file
+            except Exception as e:
+                raise Exception(f"Failed to load test fixture from {fixture_file}: {e}") from e
+
+        stack = cache["recording"].get("pendingTaskStack", [])
+        index = workflow_data.get("spiff_testFixture_index", len(stack) - 1)
+        if index < 0:
+            return {
+                "reason": "fixture_exhausted",
+                "file": fixture_file,
+                "index": index,
+                "stack": stack,
+            }
+        if index >= len(stack):
+            return {
+                "reason": "fixture_index_out_of_bounds",
+                "file": fixture_file,
+                "index": index,
+                "stack": stack,
+            }
+        return {
+            "entry": stack[index],
+            "file": fixture_file,
+            "index": index,
+            "stack": stack,
+        }
+
+    inline_fixture = (
+        task.data.get("spiff_testFixture")
+        or workflow_data.get("spiff_testFixture", {})
+    )
+    stack = inline_fixture.get("pendingTaskStack", [])
+    if not stack:
+        return {
+            "reason": "missing_inline_fixture",
+            "file": None,
+            "index": None,
+            "stack": stack,
+        }
+    return {
+        "entry": stack[-1],
+        "file": None,
+        "index": len(stack) - 1,
+        "stack": stack,
+    }
+
+
+def _consume_unittest_fixture(workflow, cursor):
+    if cursor["file"]:
+        workflow.data["spiff_testFixture_index"] = cursor["index"] - 1
+    else:
+        cursor["stack"].pop()
+
+
+def _waiting_recorded_timer(workflow, entry):
+    return next(
+        (
+            task
+            for task in workflow.get_tasks(
+                task_filter=TaskFilter(state=TaskState.WAITING)
+            )
+            if task.task_spec.bpmn_id == entry.get("id")
+            and _is_timer_event_task(task)
+        ),
+        None,
+    )
+
+
+def _is_unittest_fixture_checkpoint(task):
+    if task is None:
+        return True
+    if not task.task_spec.__class__.__name__.startswith("Custom"):
+        return False
+    return not (
+        isinstance(task.task_spec, CustomStartEvent)
+        and not isinstance(
+            task.task_spec.event_definition,
+            BpmnMessageEventDefinition,
+        )
+    )
+
+
+def _replay_recorded_timer(
+    workflow,
+    reference_task,
+    fixture_cache,
+    iteration,
+    diagnose_missing,
+):
+    cursor = _unittest_fixture_cursor(workflow, reference_task, fixture_cache)
+    entry = cursor.get("entry")
+    if not entry or entry.get("force_timer") is not True:
+        return False, None
+
+    timer_task = _waiting_recorded_timer(workflow, entry)
+    if timer_task is None:
+        if not diagnose_missing:
+            return False, None
+        print_unittest_break(
+            "recorded_timer_not_waiting",
+            iteration=iteration,
+            expected_task_id=entry.get("id"),
+            **(
+                {
+                    "fixture_file": cursor["file"],
+                    "fixture_index": cursor["index"],
+                }
+                if cursor["file"]
+                else {}
+            ),
+        )
+        return True, None
+
+    timer_task.data.update(entry.get("data", {}))
+    _force_timer_event(timer_task)
+    _consume_unittest_fixture(workflow, cursor)
+    return True, timer_task
+
+
 def _advance_workflow(workflow, task, strategy_name, compress_response=False, session_id=None):
     iters = 0
     lazy_loads_list = None
-
-    # Cache fixture file for unittest strategy to avoid repeated file I/O
-    cached_fixture = None
-    cached_fixture_file = None
-    if strategy_name == "unittest" and task:
-        fixture_file = task.data.get("spiff_testFixture_file")
-        if fixture_file:
-            try:
-                with open(fixture_file) as f:
-                    cached_fixture = json.load(f)
-                cached_fixture_file = fixture_file
-            except Exception as e:
-                raise Exception(f"Failed to load test fixture from {fixture_file}: {e}") from e
+    fixture_cache = {"file": None, "recording": None}
 
     # TODO: make maxIters part of strategy, add cycle detection
     while task and iters < 5000:
@@ -406,13 +673,21 @@ def _advance_workflow(workflow, task, strategy_name, compress_response=False, se
             print_progress(iters)
 
         if task.state == TaskState.STARTED:
-            task.complete()
+            if not (
+                isinstance(task.task_spec, CustomServiceTask)
+                and task.task_spec.handle_completed_result(task)
+            ):
+                task.complete()
         else:
             task.run()
 
         # Only check for missing lazy loads if not using file-based test fixtures
         # (file fixtures preload all specs recursively, so this check is redundant and expensive)
-        if not (strategy_name == "unittest" and cached_fixture_file):
+        fixture_file = task.data.get("spiff_testFixture_file")
+        if not (
+            strategy_name == "unittest"
+            and (fixture_file or fixture_cache["file"])
+        ):
             lazy_loads_list = lazy_loads(workflow)
             if any(spec not in workflow.subprocess_specs for spec in lazy_loads_list):
                 if strategy_name == "unittest":
@@ -430,6 +705,29 @@ def _advance_workflow(workflow, task, strategy_name, compress_response=False, se
         task = next_task(workflow, TaskState.READY, completed_task)
         if not task:
             task = next_task(workflow, TaskState.READY)
+        recorded_timer_error = False
+        if strategy_name == "unittest":
+            while True:
+                reference_task = task or completed_task
+                handled_timer, timer_task = _replay_recorded_timer(
+                    workflow,
+                    reference_task,
+                    fixture_cache,
+                    iters,
+                    _is_unittest_fixture_checkpoint(task),
+                )
+                if not handled_timer:
+                    break
+                if timer_task is None:
+                    recorded_timer_error = True
+                    break
+                completed_task = timer_task
+                task = next_task(workflow, TaskState.READY, completed_task)
+                if not task:
+                    task = next_task(workflow, TaskState.READY)
+
+        if recorded_timer_error:
+            break
         if not task:
             if strategy_name == "unittest" and not workflow.completed:
                 print_unittest_break(
@@ -442,88 +740,82 @@ def _advance_workflow(workflow, task, strategy_name, compress_response=False, se
             break
         elif strategy_name == "greedy":
             if task.task_spec.__class__.__name__.startswith("Custom"):
-                break
+                # Non-message start events (e.g. NoneEventDefinition) should still auto-complete
+                if isinstance(task.task_spec, CustomStartEvent) and not isinstance(task.task_spec.event_definition, BpmnMessageEventDefinition):
+                    pass
+                else:
+                    break
         elif strategy_name == "unittest":
             if task.task_spec.__class__.__name__.startswith("Custom"):
-                # Check for file-based fixture first (ed recording playback)
-                fixture_file = task.data.get("spiff_testFixture_file")
-                if fixture_file:
-                    # Use cached fixture data instead of re-reading from disk
-                    if cached_fixture_file != fixture_file or cached_fixture is None:
-                        # Fixture file changed or wasn't cached - shouldn't happen but handle it
-                        try:
-                            with open(fixture_file) as f:
-                                cached_fixture = json.load(f)
-                            cached_fixture_file = fixture_file
-                        except Exception as e:
-                            raise Exception(f"Failed to load test fixture from {fixture_file}: {e}") from e
-
-                    stack = cached_fixture.get("pendingTaskStack", [])
-
-                    if "spiff_testFixture_index" not in workflow.data:
-                        index = len(stack) - 1
-                    else:
-                        index = workflow.data["spiff_testFixture_index"]
-
-                    # If recording is exhausted (index < 0), let task run interactively
-                    if index < 0:
-                        print_unittest_break(
-                            "fixture_exhausted",
-                            iteration=iters,
-                            task_id=task.task_spec.bpmn_id,
-                            fixture_file=fixture_file,
-                            fixture_index=index,
-                        )
-                        break
-
-                    if index >= len(stack):
-                        print_unittest_break(
-                            "fixture_index_out_of_bounds",
-                            iteration=iters,
-                            task_id=task.task_spec.bpmn_id,
-                            fixture_file=fixture_file,
-                            fixture_index=index,
-                            fixture_length=len(stack),
-                        )
-                        break
-
-                    expected = stack[index]
-                    if task.task_spec.bpmn_id != expected["id"]:
-                        print_unittest_break(
-                            "fixture_task_mismatch",
-                            iteration=iters,
-                            task_id=task.task_spec.bpmn_id,
-                            expected_task_id=expected["id"],
-                            fixture_file=fixture_file,
-                            fixture_index=index,
-                        )
-                        break
-
-                    task.run()
-                    task.data.update(expected["data"])
-                    workflow.data["spiff_testFixture_index"] = index - 1
+                # Non-message start events should auto-complete without a fixture
+                if isinstance(task.task_spec, CustomStartEvent) and not isinstance(task.task_spec.event_definition, BpmnMessageEventDefinition):
+                    pass
                 else:
-                    # Fallback to inline fixture (process-models compatibility)
-                    stack = task.data.get("spiff_testFixture", {}).get("pendingTaskStack", [])
-                    if not stack:
+                    cursor = _unittest_fixture_cursor(
+                        workflow,
+                        task,
+                        fixture_cache,
+                    )
+                    reason = cursor.get("reason")
+                    if reason:
                         print_unittest_break(
-                            "missing_inline_fixture",
+                            reason,
                             iteration=iters,
                             task_id=task.task_spec.bpmn_id,
+                            **(
+                                {
+                                    "fixture_file": cursor["file"],
+                                    "fixture_index": cursor["index"],
+                                    **(
+                                        {"fixture_length": len(cursor["stack"])}
+                                        if reason == "fixture_index_out_of_bounds"
+                                        else {}
+                                    ),
+                                }
+                                if cursor["file"]
+                                else {}
+                            ),
                         )
                         break
-                    expected = stack.pop()
+
+                    expected = cursor["entry"]
                     if task.task_spec.bpmn_id != expected["id"]:
                         print_unittest_break(
                             "fixture_task_mismatch",
                             iteration=iters,
                             task_id=task.task_spec.bpmn_id,
                             expected_task_id=expected["id"],
+                            **(
+                                {
+                                    "fixture_file": cursor["file"],
+                                    "fixture_index": cursor["index"],
+                                }
+                                if cursor["file"]
+                                else {}
+                            ),
                         )
                         break
+
                     task.run()
                     task.data.update(expected["data"])
+                    _consume_unittest_fixture(workflow, cursor)
     return build_response(workflow, None, compress_response=compress_response, lazy_loads_result=lazy_loads_list, session_id=session_id)
+
+def _is_timer_event_task(task):
+    event_definition = getattr(task.task_spec, "event_definition", None)
+    return isinstance(event_definition, TimerEventDefinition)
+
+
+def _force_timer_event(task):
+    if not _is_timer_event_task(task):
+        raise Exception("Only waiting timer event tasks can be force-fired.")
+
+    if task.state != TaskState.WAITING:
+        raise Exception("Only waiting timer event tasks can be force-fired.")
+
+    task._set_internal_data(event_fired=True)
+    task.task_spec._update(task)
+
 
 def advance_workflow(specs, state, completed_task, strategy_name, start_params, compress_response=False, session_id=None, jump_to_step_idx=None):
     # If jumping to a specific step, restore state from step history cache
@@ -532,20 +824,27 @@ def advance_workflow(specs, state, completed_task, strategy_name, start_params, 
         if 0 <= jump_to_step_idx < len(steps):
             state = steps[jump_to_step_idx]
 
+    start_data = dict(start_params.get("data", {})) if start_params else {}
     workflow = hydrate_workflow(specs, state, session_id=session_id)
+    if _EXTERNAL_CONTEXT_KEY in start_data:
+        workflow.script_engine.external_context = start_data.pop(_EXTERNAL_CONTEXT_KEY, {})
     if state == {} and start_params:
         for task in workflow.get_tasks(task_filter=TaskFilter(state=TaskState.READY, spec_name="Start")):
-            task.data.update(start_params.get("data", {}))
+            task.data.update(start_data)
             break
 
-    if completed_task:
-        task = workflow.get_task_from_id(uuid.UUID(completed_task["id"]))
-        if "data" in completed_task:
-            task.data.update(completed_task["data"])
-    else:
-        task = next_task(workflow, TaskState.READY)
-
     try:
+        if completed_task:
+            task = workflow.get_task_from_id(uuid.UUID(completed_task["id"]))
+            if completed_task.get("force_timer"):
+                _force_timer_event(task)
+            elif task.state == TaskState.WAITING and _is_timer_event_task(task):
+                raise Exception("Waiting timer event tasks require force_timer to be force-fired.")
+            if "data" in completed_task:
+                task.data.update(completed_task["data"])
+        else:
+            task = next_task(workflow, TaskState.READY)
+
         return _advance_workflow(workflow, task, strategy_name, compress_response=compress_response, session_id=session_id)
     except Exception as e:
         try:

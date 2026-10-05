@@ -15,7 +15,7 @@ import {
 import Grid from '@mui/material/Grid';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import 'react-datepicker/dist/react-datepicker.css';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import {
   getLastMilestoneFromProcessInstance,
@@ -35,6 +35,7 @@ import {
   SpiffTableHeader,
 } from '../interfaces';
 import DateAndTimeService from '../services/DateAndTimeService';
+import FormattedDateTime from './FormattedDateTime';
 import HttpService from '../services/HttpService';
 import UserService from '../services/UserService';
 import PaginationForTable from './PaginationForTable';
@@ -65,6 +66,16 @@ type OwnProps = {
   variant?: string;
 };
 
+const SORTABLE_ACCESSORS = new Set([
+  'end_in_seconds',
+  'id',
+  'last_milestone_bpmn_name',
+  'process_initiator_username',
+  'process_model_display_name',
+  'start_in_seconds',
+  'status',
+]);
+
 export default function ProcessInstanceListTable({
   additionalReportFilters,
   autoReload = false,
@@ -84,6 +95,8 @@ export default function ProcessInstanceListTable({
   textToShowIfEmpty,
   variant = 'for-me',
 }: OwnProps) {
+  type SortDirection = 'asc' | 'desc';
+
   const navigate = useNavigate();
   const { t } = useTranslation();
   const [pagination, setPagination] = useState<PaginationObject | null>(null);
@@ -98,6 +111,7 @@ export default function ProcessInstanceListTable({
   ] = useState<ReportMetadata | null>(null);
 
   const [reportHash, setReportHash] = useState<string | null>(null);
+  const [sortOrderBy, setSortOrderBy] = useState<string[]>([]);
   const preferredUsername = UserService.getPreferredUsername();
   const userEmail = UserService.getUserEmail();
   const processInstanceShowPathPrefix =
@@ -161,6 +175,13 @@ export default function ProcessInstanceListTable({
         });
       }
 
+      if (sortOrderBy.length > 0) {
+        reportMetadataToUse = {
+          ...reportMetadataToUse,
+          order_by: sortOrderBy,
+        };
+      }
+
       const queryParamString = `per_page=${perPageToUse}&page=${page}`;
       HttpService.makeCallToBackend({
         path: `${processInstanceApiSearchPath}?${queryParamString}`,
@@ -181,6 +202,7 @@ export default function ProcessInstanceListTable({
       reportMetadata,
       searchParams,
       setProcessInstancesFromResult,
+      sortOrderBy,
       stopRefreshing,
     ],
   );
@@ -300,7 +322,7 @@ export default function ProcessInstanceListTable({
   };
 
   const formatSecondsForDisplay = (_row: ProcessInstance, seconds: any) => {
-    return DateAndTimeService.convertSecondsToFormattedDateTime(seconds) || '-';
+    return <FormattedDateTime seconds={seconds} />;
   };
   const defaultFormatter = (_row: ProcessInstance, value: any) => {
     return value;
@@ -456,12 +478,50 @@ export default function ProcessInstanceListTable({
     );
   };
 
+  const getSortDirectionForAccessor = (
+    accessor: string,
+  ): SortDirection | null => {
+    const [primarySort] = sortOrderBy;
+    if (primarySort === accessor) {
+      return 'asc';
+    }
+    if (primarySort === `-${accessor}`) {
+      return 'desc';
+    }
+    return null;
+  };
+
+  const nextSortOrderBy = (
+    accessor: string,
+    current: SortDirection | null,
+  ): string[] => {
+    if (current === 'asc') {
+      return [];
+    }
+
+    const directionPrefix = current === null ? '-' : '';
+    const primarySort = `${directionPrefix}${accessor}`;
+    if (accessor === 'id') {
+      return [primarySort];
+    }
+
+    const idTiebreaker = `${directionPrefix}id`;
+    return [primarySort, idTiebreaker];
+  };
+
+  const handleSortClick = (accessor: string) => {
+    const current = getSortDirectionForAccessor(accessor);
+    setSortOrderBy(nextSortOrderBy(accessor, current));
+  };
+
   const buildTable = () => {
-    const headers = reportColumns().map((column: ReportColumn) => {
-      return column.Header;
-    });
+    const headerColumns: { label: string; accessor: string | null }[] =
+      reportColumns().map((column: ReportColumn) => ({
+        label: column.Header,
+        accessor: column.accessor,
+      }));
     if (showActionsColumn) {
-      headers.push(t('action_column'));
+      headerColumns.push({ label: t('action_column'), accessor: null });
     }
 
     const rows = processInstances.map((processInstance: ProcessInstance) => {
@@ -482,8 +542,9 @@ export default function ProcessInstanceListTable({
         if (hasAccessToCompleteTask && processInstance.task_id) {
           goButtonElement = (
             <Button
+              component={Link}
               variant="contained"
-              href={taskShowUrl}
+              to={taskShowUrl}
               style={{ width: '60px' }}
               size="small"
             >
@@ -496,8 +557,10 @@ export default function ProcessInstanceListTable({
         )}/${processInstance.id}`;
         const piShowButtonElement = (
           <IconButton
-            href={piLink}
+            component={Link}
+            to={piLink}
             target="_blank"
+            aria-label={t('open_process_instance')}
             style={{ width: '50px' }}
             size="small"
           >
@@ -552,22 +615,40 @@ export default function ProcessInstanceListTable({
     }
 
     return (
-      <TableContainer>
+      <TableContainer tabIndex={0}>
         <Table size="medium" {...tableProps} className="process-instance-list">
           <TableHead>
             <TableRow>
-              {headers.map((tableRowHeader: any) => (
-                <TableCell
-                  key={tableRowHeader}
-                  title={
-                    tableRowHeader === 'Id'
-                      ? t('process_id_tooltip')
-                      : undefined
-                  }
-                >
-                  <TableSortLabel>{tableRowHeader}</TableSortLabel>
-                </TableCell>
-              ))}
+              {headerColumns.map((col) => {
+                const isSortable =
+                  !!col.accessor && SORTABLE_ACCESSORS.has(col.accessor);
+                const direction = col.accessor
+                  ? getSortDirectionForAccessor(col.accessor)
+                  : null;
+                return (
+                  <TableCell
+                    key={col.accessor ?? 'action-column'}
+                    title={
+                      col.label === 'Id' ? t('process_id_tooltip') : undefined
+                    }
+                    sortDirection={direction || false}
+                  >
+                    {isSortable ? (
+                      <TableSortLabel
+                        active={direction !== null}
+                        direction={direction || 'asc'}
+                        onClick={() =>
+                          col.accessor && handleSortClick(col.accessor)
+                        }
+                      >
+                        {col.label}
+                      </TableSortLabel>
+                    ) : (
+                      col.label
+                    )}
+                  </TableCell>
+                );
+              })}
             </TableRow>
           </TableHead>
           <TableBody>{rows}</TableBody>

@@ -44,8 +44,8 @@ class TestOpenidBlueprint(BaseTest):
         with_db_and_bpmn_file_cleanup: None,
     ) -> None:
         """It should be possible to get to a login page."""
-        data = {"state": {"bubblegum": 1, "daydream": 2}}
-        response = client.get("/openid/auth", params=data)  # type: ignore
+        data = {"state": str({"bubblegum": 1, "daydream": 2})}
+        response = client.get("/openid/auth", params=data)
         assert b"<h2>Login</h2>" in response.content
         assert b"bubblegum" in response.content
 

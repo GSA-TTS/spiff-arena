@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Upload,
@@ -17,7 +17,7 @@ import {
   ListItemIcon,
   ListItemText,
 } from '@mui/material';
-import { Can } from '@casl/react';
+import { Can } from '../contexts/Can';
 // Example icon
 import ProcessBreadcrumb from '../components/ProcessBreadcrumb';
 import HttpService from '../services/HttpService';
@@ -340,8 +340,8 @@ export default function ProcessModelShow() {
           >
             <Can I="PUT" a={targetUris.processModelShowPath} ability={ability}>
               <MenuItem
-                component="a"
-                href={`/process-models/${modifiedProcessModelId}/edit`}
+                component={Link}
+                to={`/process-models/${modifiedProcessModelId}/edit`}
                 data-testid="edit-process-model-menu-item"
                 onClick={handleActionsMenuClose}
               >

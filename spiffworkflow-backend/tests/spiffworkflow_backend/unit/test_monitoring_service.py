@@ -2,17 +2,23 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import Mock
 from unittest.mock import patch
 
+from flask import Flask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from werkzeug.exceptions import HTTPException
 from werkzeug.exceptions import NotFound
 
 from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.exceptions.error import NotAuthorizedError
+from spiffworkflow_backend.services.monitoring_service import configure_sentry
 from spiffworkflow_backend.services.monitoring_service import ensure_prometheus_multiproc_dir
+from spiffworkflow_backend.services.monitoring_service import filter_sentry_error_event
 from spiffworkflow_backend.services.monitoring_service import get_public_version_info_data
+from spiffworkflow_backend.services.monitoring_service import scrub_transaction_event
 from spiffworkflow_backend.services.monitoring_service import should_capture_exception_in_sentry
+from spiffworkflow_backend.services.monitoring_service import traces_sampler
 
 
 class Generic404HTTPException(HTTPException):
@@ -63,6 +69,90 @@ class TestMonitoringService(unittest.TestCase):
         finally:
             os.chdir(current_dir)
 
+    def test_traces_sampler_uses_configured_default_sample_rate(self) -> None:
+        self.assertEqual(0.25, traces_sampler({"parent_sampled": None}, default_sample_rate=0.25))
+
+    def test_traces_sampler_inherits_parent_sampling_decision(self) -> None:
+        self.assertTrue(traces_sampler({"parent_sampled": True}, default_sample_rate=0.25))
+        self.assertFalse(traces_sampler({"parent_sampled": False}, default_sample_rate=0.25))
+
+    def test_scrub_transaction_event_removes_url_tag_from_dict_tags(self) -> None:
+        event = {"type": "transaction", "tags": {"url": "https://example.com/tasks/1/abc", "environment": "prod"}}
+
+        scrubbed_event = scrub_transaction_event(event, {})
+
+        self.assertEqual({"environment": "prod"}, scrubbed_event["tags"])
+
+    def test_scrub_transaction_event_removes_url_tag_from_list_tags(self) -> None:
+        event = {
+            "type": "transaction",
+            "tags": [
+                {"key": "url", "value": "https://example.com/tasks/1/abc"},
+                {"key": "environment", "value": "prod"},
+            ],
+        }
+
+        scrubbed_event = scrub_transaction_event(event, {})
+
+        self.assertEqual([{"key": "environment", "value": "prod"}], scrubbed_event["tags"])
+
+    def test_filter_sentry_error_event_drops_log_without_exception_info(self) -> None:
+        event = {"logger": "spiffworkflow_backend.services.custom_service_task"}
+        hint = {"log_record": Mock(exc_info=None)}
+
+        self.assertIsNone(filter_sentry_error_event(event, hint))
+
+    def test_filter_sentry_error_event_drops_direct_message_without_exception_info(self) -> None:
+        self.assertIsNone(filter_sentry_error_event({"message": "boom"}, {}))
+
+    def test_filter_sentry_error_event_keeps_log_with_exception_info(self) -> None:
+        exception = ValueError("boom")
+        exc_info = (ValueError, exception, None)
+        event = {
+            "logger": "spiffworkflow_backend.services.custom_service_task",
+            "exception": {"values": [{"mechanism": {"type": "logging", "handled": True}}]},
+        }
+        hint = {"log_record": Mock(exc_info=exc_info), "exc_info": exc_info}
+
+        self.assertIs(event, filter_sentry_error_event(event, hint))
+
+    def test_filter_sentry_error_event_drops_implicit_flask_exception(self) -> None:
+        exception = ValueError("boom")
+        event = {"exception": {"values": [{"mechanism": {"type": "flask", "handled": False}}]}}
+        hint = {"exc_info": (ValueError, exception, None)}
+
+        self.assertIsNone(filter_sentry_error_event(event, hint))
+
+    def test_filter_sentry_error_event_keeps_implicit_celery_exception(self) -> None:
+        exception = ValueError("boom")
+        event = {"exception": {"values": [{"mechanism": {"type": "celery", "handled": False}}]}}
+        hint = {"exc_info": (ValueError, exception, None)}
+
+        self.assertIs(event, filter_sentry_error_event(event, hint))
+
+    def test_filter_sentry_error_event_keeps_explicit_exception(self) -> None:
+        exception = ValueError("boom")
+        event = {"exception": {"values": [{"mechanism": {"type": "generic", "handled": True}}]}}
+        hint = {"exc_info": (ValueError, exception, None)}
+
+        self.assertIs(event, filter_sentry_error_event(event, hint))
+
+    @patch("spiffworkflow_backend.services.monitoring_service.sentry_sdk.init")
+    def test_configure_sentry_registers_event_filters(self, mock_sentry_init: Mock) -> None:
+        app = Flask(__name__)
+        app.config.update(
+            SPIFFWORKFLOW_BACKEND_SENTRY_DSN="https://public@example.com/1",
+            SPIFFWORKFLOW_BACKEND_SENTRY_ERRORS_SAMPLE_RATE=1,
+            SPIFFWORKFLOW_BACKEND_SENTRY_TRACES_SAMPLE_RATE=0.01,
+            SPIFFWORKFLOW_BACKEND_SENTRY_PROFILING_ENABLED=False,
+            ENV_IDENTIFIER="unit_testing",
+        )
+
+        configure_sentry(app)
+
+        self.assertIs(mock_sentry_init.call_args.kwargs["before_send"], filter_sentry_error_event)
+        self.assertIs(mock_sentry_init.call_args.kwargs["before_send_transaction"], scrub_transaction_event)
+
     def test_not_found_is_not_captured(self) -> None:
         self.assertFalse(should_capture_exception_in_sentry(NotFound()))
 
@@ -85,12 +175,45 @@ class TestMonitoringService(unittest.TestCase):
             )
         )
 
+    def test_invalid_xml_api_error_is_not_captured(self) -> None:
+        self.assertFalse(
+            should_capture_exception_in_sentry(
+                ApiError(
+                    error_code="invalid_xml",
+                    message="'example.bpmn' is not a valid XML file.",
+                    status_code=400,
+                )
+            )
+        )
+
     def test_missing_process_instance_api_error_is_not_captured(self) -> None:
         self.assertFalse(
             should_capture_exception_in_sentry(
                 ApiError(
                     error_code="process_instance_cannot_be_found",
                     message="Process instance cannot be found: 16519",
+                    status_code=400,
+                )
+            )
+        )
+
+    def test_process_instance_has_error_tasks_api_error_is_not_captured(self) -> None:
+        self.assertFalse(
+            should_capture_exception_in_sentry(
+                ApiError(
+                    error_code="process_instance_has_error_tasks",
+                    message="Cannot resume a process instance while it has errored tasks.",
+                    status_code=400,
+                )
+            )
+        )
+
+    def test_process_instance_validation_api_error_is_not_captured(self) -> None:
+        self.assertFalse(
+            should_capture_exception_in_sentry(
+                ApiError(
+                    error_code="process_instance_validation_error",
+                    message="Failed to parse the Workflow Specification.",
                     status_code=400,
                 )
             )

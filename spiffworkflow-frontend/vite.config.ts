@@ -1,14 +1,20 @@
 import preact from '@preact/preset-vite';
-import { defineConfig } from 'vite';
-import viteTsconfigPaths from 'vite-tsconfig-paths';
+import { defineConfig, loadEnv } from 'vite';
 import svgr from 'vite-plugin-svgr';
 
 const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 7001;
 
-export default defineConfig({
-  // depending on your application, base can also be "/"
-  base: '/',
+export function resolveBasePath(env: Record<string, string | undefined>): string {
+  const raw = env.SPIFFWORKFLOW_FRONTEND_BUILD_TIME_BASE_PATH ?? '/';
+  let base = raw.trim();
+  if (!base) base = '/';
+  if (!base.startsWith('/')) base = `/${base}`;
+  if (!base.endsWith('/')) base += '/';
+  return base;
+}
+
+const config = {
   plugins: [
     // react(),
     // seems to replace preact. hot module replacement doesn't work, so commented out. also causes errors when navigating with TabList:
@@ -16,7 +22,6 @@ export default defineConfig({
     // prefresh(),
     // we need preact for bpmn-js-spiffworkflow. see https://forum.bpmn.io/t/custom-prop-for-service-tasks-typeerror-cannot-add-property-object-is-not-extensible/8487
     preact({ devToolsEnabled: false }),
-    viteTsconfigPaths(),
     svgr({
       // svgr options: https://react-svgr.com/docs/options/
       svgrOptions: {
@@ -53,13 +58,11 @@ export default defineConfig({
     // bpmn-js-spiffworkflow use the same instance (and thus the same bundled preact).
     dedupe: ['@bpmn-io/properties-panel', 'bpmn-js-properties-panel'],
     preserveSymlinks: true,
+    tsconfigPaths: true,
   },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        // carbon creates these warnings
-        silenceDeprecations: ['if-function'],
-      },
-    },
-  },
+};
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  return { ...config, base: resolveBasePath({ ...env, ...process.env }) };
 });

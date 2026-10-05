@@ -13,14 +13,32 @@ from spiffworkflow_backend.models.process_instance import ProcessInstanceStatus
 from spiffworkflow_backend.models.task import TaskModel
 from spiffworkflow_backend.models.user import UserModel
 from spiffworkflow_backend.routes.tasks_controller import _dequeued_interstitial_stream
-from spiffworkflow_backend.services.authorization_service import AuthorizationService
-from spiffworkflow_backend.services.process_instance_processor import ProcessInstanceProcessor
+from spiffworkflow_backend.services.process_instance_runtime import ProcessInstanceRuntime
 from spiffworkflow_backend.services.process_instance_service import ProcessInstanceService
+from spiffworkflow_backend.services.user_service import UserService
 from tests.spiffworkflow_backend.helpers.base_test import BaseTest
 from tests.spiffworkflow_backend.helpers.test_data import load_test_spec
 
 
 class TestTasksController(BaseTest):
+    @classmethod
+    def add_task_api_permissions(cls, *users: UserModel) -> None:
+        for user in users:
+            cls.add_permissions_to_user(
+                user,
+                target_uri="/tasks/%",
+                permission_names=["read", "update"],
+            )
+
+    @classmethod
+    def add_process_start_permissions(cls, user: UserModel, process_group_id: str) -> None:
+        process_identifier = f"{process_group_id}:%"
+        for target_uri in [
+            f"/process-instances/{process_identifier}",
+            f"/process-instance-run/{process_identifier}",
+        ]:
+            cls.add_permissions_to_user(user, target_uri=target_uri, permission_names=["create"])
+
     def test_task_show(
         self,
         app: Flask,
@@ -185,7 +203,8 @@ class TestTasksController(BaseTest):
         bpmn_file_location = "interstitial"
         # Assure we have someone in the finance team
         finance_user = self.find_or_create_user("testuser2")
-        AuthorizationService.import_permissions_from_yaml_file()
+        UserService.add_user_to_group_by_group_identifier(finance_user, "Finance Team")
+        self.add_task_api_permissions(finance_user)
         process_model = self.create_group_and_model_with_bpmn(
             client,
             with_super_admin_user,
@@ -244,9 +263,9 @@ class TestTasksController(BaseTest):
 
         # Suspending the task should still report that the user can not complete the task.
         process_instance = ProcessInstanceModel.query.filter_by(id=process_instance_id).first()
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.suspend()
-        processor.save()
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.suspend()
+        runtime.save()
 
         results = list(_dequeued_interstitial_stream(process_instance_id))
         json_results = [json.loads(x[5:]) for x in results]  # type: ignore
@@ -283,7 +302,9 @@ class TestTasksController(BaseTest):
         finance_user = self.find_or_create_user("testuser2")
         assert initiator_user.principal is not None
         assert finance_user.principal is not None
-        AuthorizationService.import_permissions_from_yaml_file()
+        UserService.add_user_to_group_by_group_identifier(finance_user, "Finance Team")
+        self.add_task_api_permissions(initiator_user, finance_user)
+        self.add_process_start_permissions(initiator_user, "finance")
 
         finance_group = GroupModel.query.filter_by(identifier="Finance Team").first()
         assert finance_group is not None
@@ -453,17 +474,17 @@ class TestTasksController(BaseTest):
             process_model_source_directory="loopback_to_manual_task",
         )
         process_instance = self.create_process_instance_from_process_model(process_model=process_model)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True, execution_strategy_name="greedy")
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True, execution_strategy_name="greedy")
         human_task_one = process_instance.active_human_tasks[0]
-        spiff_manual_task = processor.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
+        spiff_manual_task = runtime.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
         ProcessInstanceService.complete_form_task(
-            processor, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
+            runtime, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
         )
         human_task_one = process_instance.active_human_tasks[0]
-        spiff_manual_task = processor.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
+        spiff_manual_task = runtime.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
         ProcessInstanceService.complete_form_task(
-            processor, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
+            runtime, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
         )
         assert process_instance.status == ProcessInstanceStatus.user_input_required.value
 
@@ -535,17 +556,17 @@ class TestTasksController(BaseTest):
             process_model_source_directory="loopback_to_subprocess",
         )
         process_instance = self.create_process_instance_from_process_model(process_model=process_model)
-        processor = ProcessInstanceProcessor(process_instance)
-        processor.do_engine_steps(save=True, execution_strategy_name="greedy")
+        runtime = ProcessInstanceRuntime(process_instance)
+        runtime.do_engine_steps(save=True, execution_strategy_name="greedy")
         human_task_one = process_instance.active_human_tasks[0]
-        spiff_manual_task = processor.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
+        spiff_manual_task = runtime.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
         ProcessInstanceService.complete_form_task(
-            processor, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
+            runtime, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
         )
         human_task_one = process_instance.active_human_tasks[0]
-        spiff_manual_task = processor.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
+        spiff_manual_task = runtime.bpmn_process_instance.get_task_from_id(UUID(human_task_one.task_id))
         ProcessInstanceService.complete_form_task(
-            processor, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
+            runtime, spiff_manual_task, {}, process_instance.process_initiator, human_task_one
         )
         assert process_instance.status == ProcessInstanceStatus.user_input_required.value
 
@@ -571,7 +592,9 @@ class TestTasksController(BaseTest):
         finance_user = self.find_or_create_user("testuser2")
         assert initiator_user.principal is not None
         assert finance_user.principal is not None
-        AuthorizationService.import_permissions_from_yaml_file()
+        UserService.add_user_to_group_by_group_identifier(finance_user, "Finance Team")
+        self.add_task_api_permissions(initiator_user, finance_user)
+        self.add_process_start_permissions(initiator_user, "finance")
 
         process_group_id = "finance"
         process_model_id = "model_with_lanes"
@@ -688,6 +711,58 @@ class TestTasksController(BaseTest):
         assert response.json() is not None
         assert response.json()["pagination"]["count"] == 0
 
+    def test_task_list_my_tasks_sort_order(
+        self,
+        app: Flask,
+        client: TestClient,
+        with_db_and_bpmn_file_cleanup: None,
+        with_super_admin_user: UserModel,
+    ) -> None:
+        process_model = self.create_group_and_model_with_bpmn(
+            client,
+            with_super_admin_user,
+            process_group_id="sort_tasks",
+            process_model_id="dynamic_enum_select_fields",
+            bpmn_file_location="dynamic_enum_select_fields",
+        )
+        headers = self.logged_in_headers(with_super_admin_user)
+        process_instance_ids = []
+
+        for _ in range(2):
+            response = self.create_process_instance_from_process_model_id_with_api(client, process_model.id, headers)
+            assert response.status_code == 201
+            assert response.json() is not None
+            process_instance_id = response.json()["id"]
+            process_instance_ids.append(process_instance_id)
+
+            response = client.post(
+                f"/v1.0/process-instances/{self.modify_process_identifier_for_path_param(process_model.id)}"
+                f"/{process_instance_id}/run",
+                headers=headers,
+            )
+            assert response.status_code == 200
+
+        human_tasks = (
+            HumanTaskModel.query.filter(HumanTaskModel.process_instance_id.in_(process_instance_ids))  # type: ignore
+            .order_by(HumanTaskModel.id)
+            .all()
+        )
+        assert human_tasks
+        ascending_task_ids = [task.task_id for task in human_tasks]
+
+        for query_string, expected_task_ids in [
+            ("?sort=id", ascending_task_ids),
+            ("?sort=-id", list(reversed(ascending_task_ids))),
+            ("", list(reversed(ascending_task_ids))),
+        ]:
+            response = client.get(f"/v1.0/tasks{query_string}", headers=headers)
+            assert response.status_code == 200
+            assert response.json() is not None
+            assert [task["id"] for task in response.json()["results"]] == expected_task_ids
+
+        response = client.get("/v1.0/tasks?sort=created_at", headers=headers)
+        assert response.status_code == 400
+
     def test_task_list_my_tasks_returns_multiple_potential_owners(
         self,
         app: Flask,
@@ -701,7 +776,9 @@ class TestTasksController(BaseTest):
         finance_user = self.find_or_create_user("testuser2")
         assert initiator_user.principal is not None
         assert finance_user.principal is not None
-        AuthorizationService.import_permissions_from_yaml_file()
+        UserService.add_user_to_group_by_group_identifier(finance_user, "Finance Team")
+        self.add_task_api_permissions(initiator_user)
+        self.add_process_start_permissions(initiator_user, "finance")
 
         process_group_id = "finance"
         process_model_id = "model_with_lanes"
