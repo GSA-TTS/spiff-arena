@@ -2,8 +2,6 @@ import base64
 import json
 from typing import Any
 
-from authlib.integrations.flask_client import OAuth
-
 from spiffworkflow_backend.exceptions.api_error import ApiError
 from spiffworkflow_backend.services.configuration_service import ConfigurationService
 from spiffworkflow_backend.services.secret_service import SecretService
