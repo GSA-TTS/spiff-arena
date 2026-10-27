@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+
+# Sync the GSA-TTS fork with the Sartography upstream.
+#
+# Strategy (see README-TTS.md):
+#   - main is a long-lived branch. We MERGE upstream/main into it (no rebase,
+#     no force-push), preserving fork history.
+#   - The fork carries at least one fork-only alembic migration
+#     (8b258f77eafe), so every sync that pulls in a new upstream migration
+#     produces MULTIPLE alembic heads. This script detects that and generates
+#     a fresh `flask db merge heads` migration so `alembic upgrade` stays sane.
+#   - Work happens on a dated sync branch and lands via a reviewable draft PR.
+#     We never push straight to main.
+#
+# Usage:
+#   ./bin/sync_upstream                 # full run: branch, merge, fix heads, verify, push, open PR
+#   ./bin/sync_upstream --no-verify     # skip the recreate_db + pre-commit verification step
+#   ./bin/sync_upstream --no-push       # do everything locally, do not push or open a PR
+#   ./bin/sync_upstream --dry-run       # show what would happen; make no changes
+#   ./bin/sync_upstream --show-diff     # on conflict, also print the full conflict diffs
+#                                       # (combine with --dry-run to preview safely)
+
+function error_handler() {
+  echo >&2 "Exited with BAD EXIT CODE '${2}' in ${0} script at line: ${1}."
+  exit "$2"
+}
+trap 'error_handler ${LINENO} $?' ERR
+set -o errtrace -o errexit -o nounset -o pipefail
+
+script_dir="$(
+  cd -- "$(dirname "$0")" >/dev/null 2>&1
+  pwd -P
+)"
+repo_root="${script_dir}/.."
+cd "$repo_root"
+
+# --- configuration -----------------------------------------------------------
+
+UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
+UPSTREAM_BRANCH="${UPSTREAM_BRANCH:-main}"
+ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
+MAIN_BRANCH="${MAIN_BRANCH:-main}"
+BACKEND_DIR="spiffworkflow-backend"
+MIGRATIONS_DIR="${BACKEND_DIR}/migrations/versions"
+
+do_verify=1
+do_push=1
+dry_run=0
+show_diff=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-verify) do_verify=0 ;;
+    --no-push) do_push=0 ;;
+    --dry-run) dry_run=1 ;;
+    --show-diff) show_diff=1 ;;
+    -h | --help)
+      grep '^#' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo >&2 "Unknown argument: $arg"
+      exit 1
+      ;;
+  esac
+done
+
+function run() {
+  # Echo the command; execute it unless we are in dry-run mode.
+  echo "+ $*"
+  if [[ "$dry_run" -eq 0 ]]; then
+    "$@"
+  fi
+}
+
+function print_conflict_files() {
+  # List unmerged (conflicting) paths in the given work dir, one per line.
+  local wd="$1"
+  git -C "$wd" diff --name-only --diff-filter=U 2>/dev/null || true
+}
+
+function print_conflict_diffs() {
+  # Print the conflict-marked diff for every unmerged path in the given work
+  # dir. Uses `git diff` with no arguments, which for a conflicted tree emits
+  # the combined diff showing the <<<<<<< / ======= / >>>>>>> markers.
+  local wd="$1"
+  echo ""
+  echo "===================== CONFLICT DIFFS ====================="
+  local f
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    echo ""
+    echo "------------------------------------------------------------"
+    echo "### $f"
+    echo "------------------------------------------------------------"
+    git -C "$wd" diff -- "$f" 2>/dev/null || true
+  done < <(print_conflict_files "$wd")
+  echo ""
+  echo "=================== END CONFLICT DIFFS ==================="
+}
+
+function count_alembic_heads() {
+  # Count alembic heads by parsing the migration files directly. A "head" is a
+  # revision that is never referenced as another migration's down_revision.
+  # This works offline and does not require a database or a booted app.
+  # Arg 1 (optional): base dir containing the migrations tree; defaults to repo root.
+  local base="${1:-$repo_root}"
+  python3 - "${base}/${MIGRATIONS_DIR}" <<'PY'
+import os
+import re
+import sys
+
+versions_dir = sys.argv[1]
+revisions = set()
+downs = set()
+
+for name in os.listdir(versions_dir):
+    if not name.endswith(".py") or name == "__init__.py":
+        continue
+    with open(os.path.join(versions_dir, name)) as fh:
+        text = fh.read()
+    rev = re.search(r'^revision\s*=\s*["\']([^"\']+)', text, re.M)
+    if not rev:
+        continue
+    revisions.add(rev.group(1))
+    down = re.search(r'^down_revision\s*=\s*(.+)$', text, re.M)
+    if down:
+        for r in re.findall(r'["\']([0-9a-fA-F]{6,})["\']', down.group(1)):
+            downs.add(r)
+
+heads = revisions - downs
+print(len(heads))
+PY
+}
+
+# --- preflight ---------------------------------------------------------------
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  if [[ "$dry_run" -eq 1 ]]; then
+    echo >&2 "WARNING: working tree is dirty. Continuing because --dry-run makes no changes."
+    echo >&2 "         A real run will refuse to start until you commit or stash these changes."
+  else
+    echo >&2 "ERROR: working tree is dirty. Commit or stash your changes first."
+    exit 1
+  fi
+fi
+
+if ! git remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1; then
+  echo >&2 "ERROR: no '$UPSTREAM_REMOTE' remote. Add it with:"
+  echo >&2 "  git remote add $UPSTREAM_REMOTE git@github.com:sartography/spiff-arena.git"
+  exit 1
+fi
+
+echo "==> Fetching $UPSTREAM_REMOTE and $ORIGIN_REMOTE"
+# Fetch is read-only; always run it (even in dry-run) so the dry-run worktree
+# and head inspection reflect the true current state of both remotes.
+echo "+ git fetch $UPSTREAM_REMOTE --prune"
+git fetch "$UPSTREAM_REMOTE" --prune
+echo "+ git fetch $ORIGIN_REMOTE --prune"
+git fetch "$ORIGIN_REMOTE" --prune
+
+sync_branch="sync-upstream-$(date +%Y-%m-%d)"
+echo "==> Sync branch: $sync_branch (based on ${ORIGIN_REMOTE}/${MAIN_BRANCH})"
+
+if [[ "$dry_run" -eq 0 ]] && git show-ref --verify --quiet "refs/heads/${sync_branch}"; then
+  echo >&2 "ERROR: branch '$sync_branch' already exists. Delete it or finish that sync first."
+  exit 1
+fi
+
+# In dry-run mode we perform the merge inside a throwaway git worktree so we can
+# report the REAL post-merge alembic head count without touching your checkout,
+# your branches, or your dirty working tree. The worktree is always cleaned up.
+dry_worktree=""
+if [[ "$dry_run" -eq 1 ]]; then
+  dry_worktree="$(mktemp -d "${TMPDIR:-/tmp}/spiff-sync-dryrun.XXXXXX")"
+  echo "==> [dry-run] Creating throwaway worktree at $dry_worktree"
+  # Detach onto origin/main; no branch is created, nothing is pushed.
+  git worktree add --quiet --detach "$dry_worktree" "${ORIGIN_REMOTE}/${MAIN_BRANCH}"
+  cleanup_dry_worktree() {
+    if [[ -n "$dry_worktree" && -d "$dry_worktree" ]]; then
+      echo "==> [dry-run] Removing throwaway worktree"
+      git worktree remove --force "$dry_worktree" >/dev/null 2>&1 ||
+        rm -rf "$dry_worktree"
+      git worktree prune >/dev/null 2>&1 || true
+    fi
+  }
+  trap 'code=$?; cleanup_dry_worktree; error_handler ${LINENO} $code' ERR
+  trap cleanup_dry_worktree EXIT
+else
+  run git checkout -b "$sync_branch" "${ORIGIN_REMOTE}/${MAIN_BRANCH}"
+fi
+
+# Where the merge + head inspection happens. For a real run this is the repo
+# root (current checkout on the new branch); for a dry run it is the worktree.
+work_dir="$repo_root"
+if [[ "$dry_run" -eq 1 ]]; then
+  work_dir="$dry_worktree"
+fi
+
+# --- merge upstream ----------------------------------------------------------
+
+echo "==> Merging ${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}"
+merge_msg="Merge ${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH} into ${MAIN_BRANCH} ($(date +%Y-%m-%d))"
+if ! git -C "$work_dir" merge --no-edit -m "$merge_msg" "${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}"; then
+  if [[ "$dry_run" -eq 1 ]]; then
+    echo >&2 ""
+    echo >&2 "!!! [dry-run] Merge conflicts detected against ${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}."
+    echo >&2 "    A real run would stop here for you to resolve them. Conflicting files:"
+    print_conflict_files "$work_dir" | sed 's/^/      /' >&2
+    if [[ "$show_diff" -eq 1 ]]; then
+      print_conflict_diffs "$work_dir"
+    else
+      echo >&2 ""
+      echo >&2 "    Re-run with --show-diff to print the full conflict diffs."
+    fi
+    git -C "$work_dir" merge --abort >/dev/null 2>&1 || true
+    echo >&2 ""
+    echo >&2 "    (dry-run makes no changes; the throwaway worktree will be removed.)"
+    exit 1
+  fi
+  echo >&2 ""
+  echo >&2 "!!! Merge conflicts detected. Conflicting files:"
+  print_conflict_files "$work_dir" | sed 's/^/      /' >&2
+  if [[ "$show_diff" -eq 1 ]]; then
+    print_conflict_diffs "$work_dir"
+  fi
+  echo >&2 ""
+  echo >&2 "    Resolve them, then run:"
+  echo >&2 "      git add -A && git commit --no-edit"
+  echo >&2 "    and re-run this script's remaining steps, or continue manually:"
+  echo >&2 "      ./bin/sync_upstream --no-push   # after resolving, to fix heads + verify"
+  echo >&2 ""
+  echo >&2 "    The most common conflict is on the migrations. Prefer keeping BOTH"
+  echo >&2 "    the upstream chain and the fork-only migrations; the head merge below"
+  echo >&2 "    will reconcile them."
+  exit 1
+fi
+
+# --- resolve multiple alembic heads ------------------------------------------
+
+echo "==> Checking alembic migration heads (post-merge)"
+heads_before="$(count_alembic_heads "$work_dir")"
+echo "    detected heads: ${heads_before}"
+
+if [[ "$heads_before" -gt 1 ]]; then
+  echo "==> Multiple heads present; generating a merge-heads migration"
+  if [[ "$dry_run" -eq 0 ]]; then
+    pushd "$BACKEND_DIR" >/dev/null
+    uv sync
+    SPIFFWORKFLOW_BACKEND_ENV=local_development \
+      SPIFFWORKFLOW_BACKEND_DATABASE_TYPE=sqlite \
+      uv run flask db merge heads -m "merging heads from upstream sync"
+    popd >/dev/null
+
+    new_migration="$(git status --porcelain "$MIGRATIONS_DIR" | awk '/^\?\?/ {print $2}' | head -n1 || true)"
+    if [[ -n "$new_migration" ]]; then
+      echo "    created: $new_migration"
+      run git add "$MIGRATIONS_DIR"
+      run git commit -m "chore(db): merge alembic heads after upstream sync"
+    else
+      echo >&2 "WARNING: expected a new merge-heads migration but none appeared."
+    fi
+  else
+    echo "+ (would run) uv run flask db merge heads -m \"merging heads from upstream sync\""
+    echo "    [dry-run] a merge-heads migration would be generated and committed;"
+    echo "              effective head count after that would be 1."
+  fi
+else
+  echo "    single head; no merge migration needed."
+fi
+
+# --- verify ------------------------------------------------------------------
+
+if [[ "$do_verify" -eq 1 ]]; then
+  echo "==> Verifying: rebuild sqlite schema from migrations + run pre-commit"
+  pushd "$BACKEND_DIR" >/dev/null
+  if [[ "$dry_run" -eq 0 ]]; then
+    rm -f uv.lock
+    uv sync
+    SPIFFWORKFLOW_BACKEND_DATABASE_TYPE=sqlite ./bin/recreate_db clean
+    # run twice: pre-commit may reformat on the first pass
+    uv run pre-commit run --all-files || uv run pre-commit run --all-files
+  else
+    echo "+ rm -f uv.lock && uv sync && SPIFFWORKFLOW_BACKEND_DATABASE_TYPE=sqlite ./bin/recreate_db clean"
+    echo "+ uv run pre-commit run --all-files"
+  fi
+  popd >/dev/null
+
+  if [[ "$dry_run" -eq 0 ]] && [[ -n "$(git status --porcelain)" ]]; then
+    echo "==> Committing lockfile / formatting changes from verification"
+    run git add -A
+    run git commit -m "chore: refresh lockfile and formatting after upstream sync"
+  fi
+else
+  echo "==> Skipping verification (--no-verify)"
+fi
+
+# --- confirm single head before we call it done ------------------------------
+
+if [[ "$dry_run" -eq 1 ]]; then
+  echo "==> [dry-run] Plan complete. No changes were made; throwaway worktree will be removed."
+  echo "    Effective alembic heads a real run would end with: 1"
+  exit 0
+fi
+
+heads_after="$(count_alembic_heads)"
+if [[ "$heads_after" -gt 1 ]]; then
+  echo >&2 "ERROR: still ${heads_after} alembic heads after sync. Resolve before pushing."
+  exit 1
+fi
+echo "==> alembic heads after sync: ${heads_after} (OK)"
+
+# --- push + PR ---------------------------------------------------------------
+
+if [[ "$do_push" -eq 1 ]]; then
+  echo "==> Pushing $sync_branch to $ORIGIN_REMOTE"
+  run git push -u "$ORIGIN_REMOTE" "$sync_branch"
+
+  if command -v gh >/dev/null 2>&1; then
+    echo "==> Opening draft PR into $MAIN_BRANCH"
+    pr_body="$(
+      cat <<EOF
+Automated sync of \`${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}\` into \`${MAIN_BRANCH}\`.
+
+Generated by \`bin/sync_upstream\`.
+
+- Merge strategy (no rebase / no force-push).
+- Alembic heads reconciled: ${heads_before} -> ${heads_after}.
+- Verification: recreate_db (sqlite) + pre-commit $([[ "$do_verify" -eq 1 ]] && echo "ran" || echo "SKIPPED").
+
+Review the incoming upstream changes, confirm CI is green, then merge.
+EOF
+    )"
+    run gh pr create --draft \
+      --base "$MAIN_BRANCH" \
+      --head "$sync_branch" \
+      --title "Sync from upstream ($(date +%Y-%m-%d))" \
+      --body "$pr_body"
+  else
+    echo "    'gh' not found; open the PR manually:"
+    echo "      base: $MAIN_BRANCH  <-  head: $sync_branch"
+  fi
+else
+  echo "==> Skipping push/PR (--no-push). Branch '$sync_branch' is ready locally."
+fi
+
+echo "==> Done."
