@@ -164,7 +164,7 @@ Please see the [implementing files themselves](https://github.com/sartography/sp
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | delete_process_instances_with_criteria | Deletes process instances that match the provided criteria.                                                                                                    |
 | get_all_permissions                    | Gets all permissions currently in the system.                                                                                                                  |
-| get_current_task_info                  | Returns information about the current task.                                                                                                                    |
+| get_current_task_info                  | Returns metadata about the current task, excluding task data (both `data` and `delta`).                                                                        |
 | get_current_user                       | Returns the current user.                                                                                                                                      |
 | get_users_assigned_to_task             | Returns all users assigned to the task.                     |
 | get_data_sizes                         | Returns information about the size of task data.                                                                                                               |
