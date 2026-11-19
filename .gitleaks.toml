@@ -1,0 +1,26 @@
+# Repo-local gitleaks allowlist for spiff-arena.
+# Merged into the org-wide config from GSA-TTS/scanning-service, which reads
+# only the `paths` and `regexes` arrays below.
+
+[allowlist]
+description = "spiff-arena false positives (local-dev and test fixtures)"
+
+# Matched against the flagged secret value, not the file, so a different
+# secret committed to the same files is still reported.
+regexes = [
+  # BPMN auto-generated CorrelationKey element IDs
+  '''CorrelationKey_[0-9a-z]+''',
+  # Keycloak client secrets from the realm exports checked in for local dev
+  # and tests. Public dev defaults: deployments must override them.
+  '''JXeQExm0JhQPLumgHtIIqf52bDalHz0q''',
+  '''6o8kIKQznQtejHOdRhWeKorBJclMGcgA''',
+  # Flask session key used only by CI and local development scripts
+  '''e7711a3ba96c46c68e084a86952de16f''',
+]
+
+paths = [
+  # Expired (2022) Keycloak example token inside a packet-capture comment
+  '''spiffworkflow-backend/keycloak/bin/start_keycloak$''',
+  # Flagged on `secondary_key="key2"`, a data-store key name, not a credential
+  '''spiffworkflow-backend/tests/spiffworkflow_backend/unit/test_kkv_data_store\.py$''',
+]
